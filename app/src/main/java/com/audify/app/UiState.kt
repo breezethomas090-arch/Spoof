@@ -6,6 +6,7 @@ import android.os.Looper
 import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlin.concurrent.thread
@@ -16,7 +17,10 @@ sealed interface Detail {
     data class PlaylistView(val id: String) : Detail
     data class Remote(val playlist: RemotePlaylist) : Detail
     data object Account : Detail
+    data class Artist(val name: String) : Detail
 }
+
+data class ImportProgress(val name: String, val done: Int, val total: Int)
 
 data class SongMenuTarget(val song: Song, val playlistId: String? = null)
 
@@ -32,7 +36,29 @@ data class ShareTarget(
 object Ui {
     var setupDone by mutableStateOf(false)      // first-launch yt-dlp update finished (or skipped)
     var tab by mutableIntStateOf(0)            // 0 Home, 1 Search, 2 Library
-    var detail by mutableStateOf<Detail?>(null)
+    /** Pages opened on top of a tab, newest last, so Back goes to the previous page. */
+    val stack = mutableStateListOf<Detail>()
+
+    /** Setting a page opens it on top; setting null closes them all (e.g. switching tabs). */
+    var detail: Detail?
+        get() = stack.lastOrNull()
+        set(v) {
+            if (v == null) stack.clear() else if (stack.lastOrNull() != v) stack.add(v)
+        }
+
+    fun back() {
+        if (stack.isNotEmpty()) stack.removeAt(stack.size - 1)
+    }
+
+    fun openArtist(name: String) {
+        val primary = primaryArtist(name)
+        if (primary.isBlank()) return
+        showPlayer = false
+        detail = Detail.Artist(primary)
+    }
+
+    var importing by mutableStateOf<ImportProgress?>(null)
+    var showSpotifyDialog by mutableStateOf(false)
     var showPlayer by mutableStateOf(false)
     var showSettings by mutableStateOf(false)
     var showCodeDialog by mutableStateOf(false)
@@ -73,6 +99,10 @@ object Ui {
 
     /** Opens an Audify code, QR content, or YouTube link. Returns false if it wasn't recognised. */
     fun openCode(ctx: Context, text: String): Boolean {
+        if (SpotifyImport.isSpotifyLink(text)) {
+            SpotifyImport.start(ctx, text.trim())
+            return true
+        }
         val parsed = AudifyCodes.parse(text)
         if (parsed == null) {
             toast(ctx, "That isn't an Audify code or YouTube link")
@@ -109,3 +139,8 @@ object Ui {
         return true
     }
 }
+
+/** "Artist A, Artist B feat. C" -> "Artist A". */
+fun primaryArtist(name: String): String =
+    name.split(",", " & ", " feat.", " feat ", " ft.", " ft ", " x ", " X ", " with ").first()
+        .removeSuffix(" - Topic").trim()

@@ -177,12 +177,15 @@ fun NowPlayingScreen() {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(md?.title?.toString() ?: "", style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    val artist = md?.artist?.toString() ?: ""
                     Text(
-                        md?.artist?.toString() ?: "",
+                        artist,
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        // Tap the artist to open their page
+                        modifier = Modifier.clickable(enabled = artist.isNotBlank()) { Ui.openArtist(artist) },
                     )
                 }
                 if (song != null) {

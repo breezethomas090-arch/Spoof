@@ -39,6 +39,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -506,8 +507,30 @@ fun SearchScreen(vm: SearchViewModel = viewModel()) {
                     }
                 }
             }
-            else -> itemsIndexed(vm.results, key = { _, s -> s.id }) { i, s ->
-                SongRow(s, onClick = { PlayerConn.playSongs(vm.results, i) })
+            else -> {
+                // If the results are mostly by one artist that matches the search, offer their page
+                val top = vm.results.groupingBy { primaryArtist(it.artist) }.eachCount().maxByOrNull { it.value }?.key
+                if (top != null && top.isNotBlank() && (q.contains(top, true) || top.contains(q, true))) {
+                    item {
+                        Row(
+                            Modifier.fillMaxWidth().clickable { Ui.openArtist(top) }.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.size(56.dp).clip(CircleShape).background(BrandBrush), contentAlignment = Alignment.Center) {
+                                Text(top.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                            }
+                            Spacer(Modifier.width(14.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(top, style = MaterialTheme.typography.titleMedium)
+                                Text("Artist · see songs, albums and playlists", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Icon(Icons.Rounded.KeyboardArrowLeft, contentDescription = null, modifier = Modifier.rotate(180f), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                itemsIndexed(vm.results, key = { _, s -> s.id }) { i, s ->
+                    SongRow(s, onClick = { PlayerConn.playSongs(vm.results, i) })
+                }
             }
         }
     }
@@ -565,6 +588,11 @@ fun LibraryScreen() {
             }
             item {
                 CollectionRow({ IconTile(Icons.Rounded.Add, 64.dp) }, "Create playlist", "") { Ui.newPlaylistFor = emptyList() }
+            }
+            item {
+                CollectionRow({ IconTile(AppIcons.PlaylistAdd, 64.dp, SpotifyBrush) }, "Import from Spotify", "Bring over playlists, albums and songs") {
+                    Ui.showSpotifyDialog = true
+                }
             }
         }
     }
@@ -643,6 +671,7 @@ fun DetailScreen(d: Detail) {
         Detail.Account -> AccountScreen()
         is Detail.Remote -> RemotePlaylistScreen(d.playlist)
         is Detail.PlaylistView -> PlaylistScreen(d.id)
+        is Detail.Artist -> ArtistScreen(d.name)
     }
 }
 
@@ -653,7 +682,7 @@ private fun PlaylistScreen(id: String) {
     val playlists by Store.playlists.collectAsStateWithLifecycle()
     val p = playlists.firstOrNull { it.id == id }
     if (p == null) {
-        LaunchedEffect(Unit) { Ui.detail = null }
+        LaunchedEffect(Unit) { Ui.back() }
         return
     }
     var menu by remember { mutableStateOf(false) }
@@ -728,7 +757,7 @@ private fun PlaylistScreen(id: String) {
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false
-                    Ui.detail = null
+                    Ui.back()
                     Store.deletePlaylist(p.id)
                 }) { Text("Delete") }
             },
@@ -746,12 +775,12 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         private set
     private var loadedId: String? = null
 
-    fun load(id: String) {
-        if (loadedId == id) return
-        loadedId = id
+    fun load(r: RemotePlaylist) {
+        if (loadedId == r.id) return
+        loadedId = r.id
         loading = true
         viewModelScope.launch {
-            runCatching { withContext(Dispatchers.IO) { Downloader.playlistSongs(getApplication(), id) } }
+            runCatching { withContext(Dispatchers.IO) { Downloader.remoteSongs(getApplication(), r) } }
                 .onSuccess { songs = it }
                 .onFailure { error = shortError(it) }
             loading = false
@@ -763,7 +792,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 private fun RemotePlaylistScreen(r: RemotePlaylist) {
     val ctx = LocalContext.current
     val vm: RemoteViewModel = viewModel(key = "remote:" + r.id)
-    LaunchedEffect(r.id) { vm.load(r.id) }
+    LaunchedEffect(r.id) { vm.load(r) }
     val playlists by Store.playlists.collectAsStateWithLifecycle()
     val saved = playlists.any { it.name == r.title && it.owner == r.channel.ifBlank { "YouTube" } }
 
@@ -811,7 +840,7 @@ private fun DetailHeader(
     val tint by rememberArtColor(colorModel)
     Column(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(tint, Color.Black)))) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { Ui.detail = null }) {
+            IconButton(onClick = { Ui.back() }) {
                 Icon(Icons.Rounded.KeyboardArrowLeft, contentDescription = "Back", modifier = Modifier.size(30.dp))
             }
         }
@@ -965,7 +994,7 @@ private fun AccountScreen() {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Row(Modifier.fillMaxWidth().padding(4.dp)) {
-                IconButton(onClick = { Ui.detail = null }) {
+                IconButton(onClick = { Ui.back() }) {
                     Icon(Icons.Rounded.KeyboardArrowLeft, contentDescription = "Back", modifier = Modifier.size(30.dp))
                 }
                 Spacer(Modifier.weight(1f))
@@ -1045,4 +1074,194 @@ private fun Stat(n: Int, label: String) {
         Text("$n", style = MaterialTheme.typography.titleLarge)
         Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+}
+
+// ============================================================== artist
+
+class ArtistViewModel(app: Application) : AndroidViewModel(app) {
+    var thumb by mutableStateOf<String?>(null)
+        private set
+    var songs by mutableStateOf<List<Song>>(emptyList())
+        private set
+    var albums by mutableStateOf<List<RemotePlaylist>>(emptyList())
+        private set
+    var playlists by mutableStateOf<List<RemotePlaylist>>(emptyList())
+        private set
+    var loading by mutableStateOf(true)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
+    private var loaded: String? = null
+
+    fun load(name: String) {
+        if (loaded == name) return
+        loaded = name
+        loading = true
+        val ctx: Application = getApplication()
+        // Four lookups in parallel; each part of the page fills in as it arrives
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { Downloader.artistSongs(ctx, name) } }
+                .onSuccess { songs = it }
+                .onFailure { error = shortError(it) }
+            loading = false
+        }
+        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { Downloader.artistThumb(ctx, name) } }.onSuccess { thumb = it } }
+        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { Downloader.artistAlbums(ctx, name) } }.onSuccess { albums = it } }
+        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { Downloader.artistPlaylists(ctx, name) } }.onSuccess { playlists = it } }
+    }
+}
+
+@Composable
+fun ArtistScreen(name: String) {
+    val vm: ArtistViewModel = viewModel(key = "artist:$name")
+    LaunchedEffect(name) { vm.load(name) }
+    val tint by rememberArtColor(vm.thumb ?: vm.songs.firstOrNull()?.thumb)
+    var showAll by rememberSaveable(name) { mutableStateOf(false) }
+    val shown = if (showAll) vm.songs else vm.songs.take(10)
+
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+        item {
+            Column(
+                Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(tint, Color.Black))),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Row(Modifier.fillMaxWidth().padding(4.dp)) {
+                    IconButton(onClick = { Ui.back() }) {
+                        Icon(Icons.Rounded.KeyboardArrowLeft, contentDescription = "Back", modifier = Modifier.size(30.dp))
+                    }
+                }
+                val photo = vm.thumb
+                if (photo != null) {
+                    Artwork(photo, Modifier.size(180.dp).shadow(20.dp, CircleShape), CircleShape)
+                } else {
+                    Box(
+                        Modifier.size(180.dp).clip(CircleShape).background(BrandBrush),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(name.take(1).uppercase(), style = MaterialTheme.typography.displayMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                Text(name, style = MaterialTheme.typography.headlineLarge, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 16.dp))
+                Text("Artist", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Spacer(Modifier.weight(1f))
+                    if (vm.songs.isNotEmpty()) {
+                        IconButton(onClick = { PlayerConn.playSongs(vm.songs, vm.songs.indices.random(), shuffled = true) }) {
+                            Icon(AppIcons.Shuffle, contentDescription = "Shuffle", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(28.dp))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        GradientPlayButton(56.dp, playing = false) { PlayerConn.playSongs(vm.songs, 0) }
+                    }
+                }
+            }
+        }
+
+        item { Text("Popular", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp)) }
+        when {
+            vm.loading -> item {
+                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(strokeWidth = 2.dp) }
+            }
+            vm.songs.isEmpty() -> item {
+                Text(
+                    vm.error ?: "No songs found for $name",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+            else -> {
+                itemsIndexed(shown, key = { _, s -> "a:" + s.id }) { i, s ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "${i + 1}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.width(36.dp),
+                        )
+                        Box(Modifier.weight(1f)) { SongRow(s, onClick = { PlayerConn.playSongs(vm.songs, i) }) }
+                    }
+                }
+                if (vm.songs.size > 10) {
+                    item {
+                        TextButton(onClick = { showAll = !showAll }, modifier = Modifier.padding(start = 8.dp)) {
+                            Text(if (showAll) "Show less" else "See all ${vm.songs.size} songs")
+                        }
+                    }
+                }
+            }
+        }
+
+        if (vm.albums.isNotEmpty()) {
+            item { SectionHeader("Albums & singles") }
+            item {
+                LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(vm.albums, key = { "al:" + it.id }) { r ->
+                        CoverCard(r.title, "Album", onClick = { Ui.detail = Detail.Remote(r) }) { RemoteCover(r, 142.dp) }
+                    }
+                }
+            }
+        }
+        if (vm.playlists.isNotEmpty()) {
+            item { SectionHeader("Featuring $name") }
+            item {
+                LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(vm.playlists, key = { "pl:" + it.id }) { r ->
+                        CoverCard(r.title, r.channel, onClick = { Ui.detail = Detail.Remote(r) }) { RemoteCover(r, 142.dp) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================== Spotify import
+
+@Composable
+fun SpotifyImportDialog() {
+    val ctx = LocalContext.current
+    var link by remember { mutableStateOf("") }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val valid = SpotifyImport.isSpotifyLink(link)
+
+    AlertDialog(
+        onDismissRequest = { Ui.showSpotifyDialog = false },
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        icon = { IconTile(AppIcons.PlaylistAdd, 48.dp, SpotifyBrush) },
+        title = { Text("Import from Spotify") },
+        text = {
+            Column {
+                Text(
+                    "In Spotify, open a playlist, album or song, tap ⋯ → Share → Copy link, then paste it here. Audify finds every song and makes it a playlist.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = link,
+                    onValueChange = { link = it },
+                    singleLine = true,
+                    placeholder = { Text("https://open.spotify.com/playlist/…") },
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = link.isNotBlank() && !valid,
+                )
+                TextButton(onClick = { clipboard.getText()?.text?.let { link = it.trim() } }) { Text("Paste from clipboard") }
+                Text(
+                    "Works with public playlists (up to 100 songs), albums and songs. Liked Songs is private on Spotify, so add those songs to a public playlist first.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = valid, onClick = {
+                SpotifyImport.start(ctx, link.trim())
+                Ui.showSpotifyDialog = false
+            }) { Text("Import") }
+        },
+        dismissButton = { TextButton(onClick = { Ui.showSpotifyDialog = false }) { Text("Cancel") } },
+    )
 }

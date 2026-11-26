@@ -12,8 +12,8 @@ android {
         applicationId = "com.audify.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 6
-        versionName = "4.2"
+        versionCode = 7
+        versionName = "5.0"
     }
 
     // yt-dlp + Python + ffmpeg are native per-CPU, so build one APK per ABI to keep size down.
@@ -63,6 +63,7 @@ dependencies {
     val ytdl = "0.18.1"
     implementation("io.github.junkfood02.youtubedl-android:library:$ytdl")
     implementation("io.github.junkfood02.youtubedl-android:ffmpeg:$ytdl")
+    implementation("io.github.junkfood02.youtubedl-android:aria2c:$ytdl")
 
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.compose.ui:ui")
@@ -75,6 +76,8 @@ dependencies {
 
     implementation("androidx.media3:media3-exoplayer:1.5.0")
     implementation("androidx.media3:media3-session:1.5.0")
+    implementation("androidx.media3:media3-datasource:1.5.0")
+    implementation("androidx.media3:media3-database:1.5.0")
     implementation("com.google.guava:guava:33.3.1-android")
 
     implementation("io.coil-kt:coil-compose:2.7.0")

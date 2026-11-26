@@ -82,6 +82,12 @@ fun SongMenuSheet(target: SongMenuTarget) {
             Store.toggleLike(song)
             dismiss()
         }
+        if (song.artist.isNotBlank()) {
+            MenuItem(AppIcons.MusicNote, "Go to artist: ${primaryArtist(song.artist)}") {
+                dismiss()
+                Ui.openArtist(song.artist)
+            }
+        }
         MenuItem(AppIcons.PlaylistAdd, "Add to playlist") {
             Ui.addToPlaylist = listOf(song)
             dismiss()
@@ -319,6 +325,7 @@ fun SettingsDialog() {
     var quality by remember { mutableStateOf(Prefs.quality) }
     var streamQ by remember { mutableStateOf(Prefs.streamQuality) }
     var keep by remember { mutableStateOf(Prefs.keepVideo) }
+    var fast by remember { mutableStateOf(Prefs.fastDownloads) }
     var status by remember { mutableStateOf<String?>(null) }
     var updating by remember { mutableStateOf(false) }
     val dismiss = { Ui.showSettings = false }
@@ -379,6 +386,16 @@ fun SettingsDialog() {
             item {
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 Row(
+                    Modifier.fillMaxWidth().clickable { fast = !fast; Prefs.fastDownloads = fast }.padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Fast downloads", style = MaterialTheme.typography.bodyLarge)
+                        Text("Uses several connections at once (aria2c) and 2 downloads at a time", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = fast, onCheckedChange = { fast = it; Prefs.fastDownloads = it })
+                }
+                Row(
                     Modifier.fillMaxWidth().clickable { keep = !keep; Prefs.keepVideo = keep }.padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -411,7 +428,7 @@ fun SettingsDialog() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     LogoMark(18.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text("Audify 4.2", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Audify 5.0", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(Modifier.height(32.dp))
             }

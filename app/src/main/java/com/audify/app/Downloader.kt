@@ -2,6 +2,7 @@ package com.audify.app
 
 import android.content.Context
 import android.os.Environment
+import com.yausername.aria2c.Aria2c
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
@@ -30,6 +31,7 @@ object Downloader {
         if (ready) return
         YoutubeDL.getInstance().init(ctx.applicationContext)
         FFmpeg.getInstance().init(ctx.applicationContext)
+        runCatching { Aria2c.getInstance().init(ctx.applicationContext) }
         ready = true
     }
 
@@ -169,9 +171,53 @@ object Downloader {
             val thumbs = e.optJSONArray("thumbnails")
             val thumb = thumbs?.optJSONObject(thumbs.length() - 1)?.optString("url")?.takeIf { it.startsWith("http") }
             val count = if (e.isNull("playlist_count")) 0 else e.optInt("playlist_count")
-            out += RemotePlaylist(id, title, e.str("channel").ifEmpty { e.str("uploader") }.ifEmpty { "YouTube Music" }, thumb, count)
+            val url = e.str("url").takeIf { it.startsWith("http") && it.contains("/browse/") }
+            out += RemotePlaylist(id, title, artistOf(e).ifEmpty { "YouTube Music" }, thumb, count, url)
         }
         return out.distinctBy { it.id }
+    }
+
+    /** Songs in a public playlist or album. */
+    fun remoteSongs(ctx: Context, r: RemotePlaylist, limit: Int = 100): List<Song> =
+        if (r.url != null) flatList(ctx, r.url, limit) else playlistSongs(ctx, r.id, limit)
+
+    // ---------------------------------------------------------------- artists
+
+    fun artistSongs(ctx: Context, name: String): List<Song> {
+        val all = musicSongs(ctx, name, 40)
+        return all.filter { it.artist.contains(name, ignoreCase = true) }.ifEmpty { all }.take(25)
+    }
+
+    fun artistAlbums(ctx: Context, name: String): List<RemotePlaylist> =
+        playlistResults(ctx, "https://music.youtube.com/search?q=${enc(name)}#albums", 15)
+            .filter { it.channel.contains(name, ignoreCase = true) || it.channel == "YouTube Music" }
+
+    fun artistPlaylists(ctx: Context, name: String): List<RemotePlaylist> = publicPlaylists(ctx, "$name", 12)
+
+    /** The artist's profile picture from YouTube Music's "Artists" search. */
+    fun artistThumb(ctx: Context, name: String): String? {
+        init(ctx)
+        val req = YoutubeDLRequest("https://music.youtube.com/search?q=${enc(name)}#artists").apply {
+            addOption("--flat-playlist")
+            addOption("-J")
+            addOption("--no-warnings")
+            addOption("--playlist-end", "3")
+        }
+        val entries = JSONObject(run(req, "artist")).optJSONArray("entries") ?: return null
+        for (i in 0 until entries.length()) {
+            val e = entries.optJSONObject(i) ?: continue
+            val thumbs = e.optJSONArray("thumbnails") ?: continue
+            val url = thumbs.optJSONObject(thumbs.length() - 1)?.optString("url")?.takeIf { it.startsWith("http") } ?: continue
+            return if (url.startsWith("//")) "https:$url" else url
+        }
+        return null
+    }
+
+    /** Best YouTube match for a song known only by title and artist (used for Spotify imports). */
+    fun matchSong(ctx: Context, title: String, artist: String): Song? {
+        val q = "$title $artist".trim()
+        runCatching { musicSongs(ctx, q, 5).firstOrNull() }.getOrNull()?.let { return it }
+        return runCatching { flatList(ctx, "ytsearch5:$q audio", 5).firstOrNull(::isSingleSong) }.getOrNull()
     }
 
     fun playlistSongs(ctx: Context, playlistId: String, limit: Int = 100): List<Song> =
@@ -234,6 +280,7 @@ object Downloader {
         quality: Quality,
         keepVideo: Boolean,
         processId: String,
+        fast: Boolean = true,
         onProgress: (Float, String) -> Unit,
     ): File {
         init(ctx)
@@ -243,6 +290,14 @@ object Downloader {
                 addOption("--no-playlist")
                 addOption("--windows-filenames")
                 addOption("--no-mtime")
+                addOption("--concurrent-fragments", "4")
+                if (fast) {
+                    // aria2c opens several connections at once, which gets past YouTube's per-connection speed limit
+                    addOption("--downloader", "libaria2c.so")
+                    addOption("--external-downloader-args", "aria2c:-x 8 -s 8 -k 1M --summary-interval=1 --console-log-level=warn")
+                } else {
+                    addOption("--http-chunk-size", "10M")
+                }
                 if (keepVideo) {
                     addOption("-f", "bv*+ba/b")
                     addOption("--merge-output-format", "mp4")

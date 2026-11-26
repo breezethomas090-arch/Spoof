@@ -43,17 +43,60 @@ object Streams {
 
     fun clear() = cache.clear()
 
+    // ---- on-disk audio cache: replays and seeks don't re-download, next song is pre-buffered
+    private var diskCache: androidx.media3.datasource.cache.SimpleCache? = null
+    private var cacheFactory: androidx.media3.datasource.cache.CacheDataSource.Factory? = null
+
+    @OptIn(UnstableApi::class)
+    @Synchronized
+    fun dataSourceFactory(ctx: Context): androidx.media3.datasource.cache.CacheDataSource.Factory {
+        cacheFactory?.let { return it }
+        val app = ctx.applicationContext
+        val cache = androidx.media3.datasource.cache.SimpleCache(
+            java.io.File(app.cacheDir, "audio-cache"),
+            androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor(400L * 1024 * 1024),
+            androidx.media3.database.StandaloneDatabaseProvider(app),
+        )
+        val http = DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(20_000)
+        val resolving = ResolvingDataSource.Factory(DefaultDataSource.Factory(app, http)) { spec -> resolve(app, spec) }
+        val factory = androidx.media3.datasource.cache.CacheDataSource.Factory()
+            .setCache(cache)
+            .setUpstreamDataSourceFactory(resolving)
+            // Key by song id + quality, not by the (expiring) YouTube URL
+            .setCacheKeyFactory { spec -> spec.uri.toString() + "|" + Prefs.streamQuality.name }
+            .setFlags(androidx.media3.datasource.cache.CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        diskCache = cache
+        cacheFactory = factory
+        return factory
+    }
+
+    /** Download the first ~1.5 MB of a song into the cache so it starts instantly. */
+    @OptIn(UnstableApi::class)
+    private fun prebuffer(ctx: Context, id: String) {
+        val factory = cacheFactory ?: return
+        runCatching {
+            val spec = DataSpec.Builder().setUri(Uri.parse("ytid:$id")).setLength(1_500_000).build()
+            androidx.media3.datasource.cache.CacheWriter(factory.createDataSourceForDownloading(), spec, null, null).cache()
+        }
+    }
+
     private val prefetcher = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val pending = ConcurrentHashMap.newKeySet<String>()
 
     /** Resolve upcoming songs in the background so they start instantly. */
     fun prefetch(ctx: Context, id: String) {
         val now = System.currentTimeMillis()
-        if (cache[id]?.let { now - it.at < TTL_MS } == true || !pending.add(id)) return
+        if (!pending.add(id)) return
         prefetcher.execute {
             try {
-                val (url, ua) = Downloader.streamInfo(ctx, id)
-                cache[id] = Entry(url, ua, System.currentTimeMillis())
+                if (cache[id]?.let { now - it.at < TTL_MS } != true) {
+                    val (url, ua) = Downloader.streamInfo(ctx, id)
+                    cache[id] = Entry(url, ua, System.currentTimeMillis())
+                }
+                prebuffer(ctx, id)
             } catch (_: Exception) {
             } finally {
                 pending.remove(id)
@@ -80,6 +123,41 @@ object Streams {
     }
 }
 
+/** Sends "ytid:" streams through the cache and everything else (local files) straight to disk. */
+@OptIn(UnstableApi::class)
+private class StreamOrFileDataSource(
+    private val stream: androidx.media3.datasource.DataSource,
+    private val plain: androidx.media3.datasource.DataSource,
+) : androidx.media3.datasource.DataSource {
+    private var active: androidx.media3.datasource.DataSource? = null
+
+    override fun addTransferListener(transferListener: androidx.media3.datasource.TransferListener) {
+        stream.addTransferListener(transferListener)
+        plain.addTransferListener(transferListener)
+    }
+
+    override fun open(dataSpec: DataSpec): Long {
+        val ds = if (dataSpec.uri.scheme == "ytid") stream else plain
+        active = ds
+        return ds.open(dataSpec)
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+        active?.read(buffer, offset, length) ?: throw java.io.IOException("Not opened")
+
+    override fun getUri(): Uri? = active?.uri
+
+    override fun getResponseHeaders(): Map<String, List<String>> = active?.responseHeaders ?: emptyMap()
+
+    override fun close() {
+        try {
+            active?.close()
+        } finally {
+            active = null
+        }
+    }
+}
+
 /**
  * Media3 playback service: plays downloaded files and streams, keeps going in the
  * background, and provides notification / lock screen / headset / Bluetooth controls.
@@ -92,20 +170,22 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        val http = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(20_000)
-        val upstream = DefaultDataSource.Factory(this, http)
-        val resolving = ResolvingDataSource.Factory(upstream) { spec -> Streams.resolve(applicationContext, spec) }
+        val streamFactory = Streams.dataSourceFactory(this)
+        val plainFactory = DefaultDataSource.Factory(this)
+        // Streams go through the cache; downloaded files are read directly
+        val dataSource = androidx.media3.datasource.DataSource.Factory {
+            StreamOrFileDataSource(streamFactory.createDataSource(), plainFactory.createDataSource())
+        }
 
-        // Start playing after 1s of audio is buffered (default is 2.5s) so streams start sooner
+        // Start after 1s of audio, then keep up to 2 minutes buffered so network hiccups don't stall playback.
+        // After a stall, wait for 3s of audio so it doesn't stutter on and off.
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, 60_000, 1_000, 2_000)
+            .setBufferDurationsMs(30_000, 120_000, 1_000, 3_000)
+            .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
         val player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(resolving))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
             .setLoadControl(loadControl)
             .setAudioAttributes(
                 AudioAttributes.Builder()

@@ -58,7 +58,22 @@ data class Playlist(
 )
 
 /** A public playlist on YouTube (other people's playlists). */
-data class RemotePlaylist(val id: String, val title: String, val channel: String, val thumb: String?, val count: Int)
+data class RemotePlaylist(
+    val id: String,
+    val title: String,
+    val channel: String,
+    val thumb: String?,
+    val count: Int,
+    val url: String? = null,    // for albums opened by URL
+)
+
+data class ArtistPage(
+    val name: String,
+    val thumb: String?,
+    val songs: List<Song>,
+    val albums: List<RemotePlaylist>,
+    val playlists: List<RemotePlaylist>,
+)
 
 /** Liked songs, playlists and listening history, saved to a small JSON file. */
 object Store {
@@ -276,6 +291,10 @@ object Prefs {
     fun init(ctx: Context) {
         sp = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
     }
+
+    var fastDownloads: Boolean
+        get() = sp.getBoolean("fastDownloads", true)
+        set(v) = sp.edit().putBoolean("fastDownloads", v).apply()
 
     var setupDone: Boolean
         get() = sp.getBoolean("setupDone", false)

@@ -107,6 +107,25 @@ fun AppRoot() {
             NowPlayingScreen()
         }
 
+        // Spotify import progress
+        val imp = Ui.importing
+        AnimatedVisibility(visible = imp != null, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.Center)) {
+            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.padding(32.dp)) {
+                Column(Modifier.padding(24.dp).width(260.dp)) {
+                    Text("Importing from Spotify", style = MaterialTheme.typography.titleMedium)
+                    Text(imp?.name ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    Spacer(Modifier.height(16.dp))
+                    if (imp != null && imp.total > 0) {
+                        LinearProgressIndicator(progress = { imp.done.toFloat() / imp.total }, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(8.dp))
+                        Text("Finding songs: ${imp.done} of ${imp.total}", style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                    }
+                }
+            }
+        }
+
         // "Opening…" overlay while a code is being looked up
         AnimatedVisibility(visible = Ui.busy != null, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.Center)) {
             Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
@@ -120,7 +139,7 @@ fun AppRoot() {
     }
 
     BackHandler(enabled = Ui.showPlayer || Ui.detail != null) {
-        if (Ui.showPlayer) Ui.showPlayer = false else Ui.detail = null
+        if (Ui.showPlayer) Ui.showPlayer = false else Ui.back()
     }
 
     Ui.menu?.let { SongMenuSheet(it) }
@@ -135,6 +154,7 @@ fun AppRoot() {
         }
     }
     Ui.share?.let { ShareDialog(it) }
+    if (Ui.showSpotifyDialog) SpotifyImportDialog()
     if (Ui.showSettings) SettingsDialog()
     if (Ui.showCodeDialog) {
         CodeDialog(onScan = {

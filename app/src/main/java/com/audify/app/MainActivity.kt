@@ -62,6 +62,10 @@ class MainActivity : ComponentActivity() {
         } ?: return
         intent?.action = null
         val link = Regex("""(audify://\S+|https?://\S+)""").find(text)?.value ?: text
+        if (SpotifyImport.isSpotifyLink(link)) {
+            SpotifyImport.start(this, link)
+            return
+        }
         // Player connection may still be starting: give it a moment
         window.decorView.postDelayed({ Ui.openCode(this, link) }, 600)
     }

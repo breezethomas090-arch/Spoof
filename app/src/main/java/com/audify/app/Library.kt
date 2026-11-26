@@ -101,7 +101,7 @@ object Downloads {
     private val _jobs = MutableStateFlow<Map<String, DlJob>>(emptyMap())
     val jobs: StateFlow<Map<String, DlJob>> = _jobs.asStateFlow()
 
-    private val executor = Executors.newSingleThreadExecutor()
+    private val executor = Executors.newFixedThreadPool(2)   // two downloads at a time
     private val cancelled = ConcurrentHashMap.newKeySet<String>()
 
     fun enqueue(ctx: Context, song: Song) = enqueue(ctx, song.url, song.title, song.id)
@@ -116,9 +116,15 @@ object Downloads {
         executor.execute {
             if (cancelled.remove(key)) return@execute
             setState(key, DlState.Running(-1f, "Starting…"))
+            val progress = { pct: Float, line: String -> setState(key, DlState.Running(pct, line)) }
             try {
-                Downloader.fetch(app, url, Prefs.quality, Prefs.keepVideo, "dl-$key") { pct, line ->
-                    setState(key, DlState.Running(pct, line))
+                try {
+                    Downloader.fetch(app, url, Prefs.quality, Prefs.keepVideo, "dl-$key", fast = Prefs.fastDownloads, onProgress = progress)
+                } catch (e: Exception) {
+                    // Fast mode failed (e.g. aria2c unavailable): retry the normal way
+                    if (!Prefs.fastDownloads || cancelled.contains(key)) throw e
+                    setState(key, DlState.Running(-1f, "Retrying…"))
+                    Downloader.fetch(app, url, Prefs.quality, Prefs.keepVideo, "dl-$key", fast = false, onProgress = progress)
                 }
                 Library.refresh(app)
                 remove(key)

@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 val Violet = Color(0xFF8B5CF6)
 val Pink = Color(0xFFEC4899)
 val BrandBrush = Brush.linearGradient(listOf(Violet, Pink))
+val SpotifyBrush = Brush.linearGradient(listOf(Color(0xFF1ED760), Color(0xFF0F7A37)))
 
 private val Scheme = darkColorScheme(
     primary = Color(0xFFB79CFF),
