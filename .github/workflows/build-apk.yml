@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
@@ -27,3 +29,14 @@ jobs:
         with:
           name: YTPlayer-apks
           path: app/build/outputs/apk/release/*.apk
+
+      # Publishes the APKs as a GitHub Release so they can be downloaded directly on a phone
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest app/build/outputs/apk/release/*.apk \
+            --title "YT Player (latest build)" \
+            --notes "Most phones: install app-arm64-v8a-release.apk. Older 32-bit phones: armeabi-v7a."
