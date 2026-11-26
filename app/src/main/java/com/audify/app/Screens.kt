@@ -594,6 +594,11 @@ fun LibraryScreen() {
                     Ui.showSpotifyDialog = true
                 }
             }
+            item {
+                CollectionRow({ IconTile(AppIcons.PlaylistAdd, 64.dp, YtMusicBrush) }, "Import from YouTube Music", "Playlists and albums, any size") {
+                    Ui.showYtDialog = true
+                }
+            }
         }
     }
 }
@@ -1267,5 +1272,52 @@ fun SpotifyImportDialog() {
             }) { Text("Import") }
         },
         dismissButton = { TextButton(onClick = { Ui.showSpotifyDialog = false }) { Text("Cancel") } },
+    )
+}
+
+
+@Composable
+fun YtMusicImportDialog() {
+    val ctx = LocalContext.current
+    var link by remember { mutableStateOf("") }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val valid = YtMusicImport.hasPlaylist(link)
+
+    AlertDialog(
+        onDismissRequest = { Ui.showYtDialog = false },
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        icon = { IconTile(AppIcons.PlaylistAdd, 48.dp, YtMusicBrush) },
+        title = { Text("Import from YouTube Music") },
+        text = {
+            Column {
+                Text(
+                    "In YouTube Music, open a playlist or album, tap ⋮ → Share → Copy link, then paste it here. YouTube playlist links work too.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = link,
+                    onValueChange = { link = it },
+                    singleLine = true,
+                    placeholder = { Text("https://music.youtube.com/playlist?list=…") },
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = link.isNotBlank() && !valid,
+                )
+                TextButton(onClick = { clipboard.getText()?.text?.let { link = it.trim() } }) { Text("Paste from clipboard") }
+                Text(
+                    "Works with public and unlisted playlists (up to 1,000 songs) and albums. Your Liked Music is private, so copy those songs into a playlist first.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = valid, onClick = {
+                YtMusicImport.start(ctx, link.trim())
+                Ui.showYtDialog = false
+            }) { Text("Import") }
+        },
+        dismissButton = { TextButton(onClick = { Ui.showYtDialog = false }) { Text("Cancel") } },
     )
 }

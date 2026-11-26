@@ -66,6 +66,10 @@ class MainActivity : ComponentActivity() {
             SpotifyImport.start(this, link)
             return
         }
+        if (YtMusicImport.isPlaylistLink(link)) {
+            YtMusicImport.start(this, link)
+            return
+        }
         // Player connection may still be starting: give it a moment
         window.decorView.postDelayed({ Ui.openCode(this, link) }, 600)
     }

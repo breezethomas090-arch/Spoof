@@ -59,6 +59,7 @@ object Ui {
 
     var importing by mutableStateOf<ImportProgress?>(null)
     var showSpotifyDialog by mutableStateOf(false)
+    var showYtDialog by mutableStateOf(false)
     var showPlayer by mutableStateOf(false)
     var showSettings by mutableStateOf(false)
     var showEq by mutableStateOf(false)
@@ -102,6 +103,10 @@ object Ui {
     fun openCode(ctx: Context, text: String): Boolean {
         if (SpotifyImport.isSpotifyLink(text)) {
             SpotifyImport.start(ctx, text.trim())
+            return true
+        }
+        if (YtMusicImport.isPlaylistLink(text)) {
+            YtMusicImport.start(ctx, text.trim())
             return true
         }
         val parsed = AudifyCodes.parse(text)

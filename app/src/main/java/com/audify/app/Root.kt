@@ -112,7 +112,7 @@ fun AppRoot() {
         AnimatedVisibility(visible = imp != null, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.Center)) {
             Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.padding(32.dp)) {
                 Column(Modifier.padding(24.dp).width(260.dp)) {
-                    Text("Importing from Spotify", style = MaterialTheme.typography.titleMedium)
+                    Text("Importing playlist", style = MaterialTheme.typography.titleMedium)
                     Text(imp?.name ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                     Spacer(Modifier.height(16.dp))
                     if (imp != null && imp.total > 0) {
@@ -155,6 +155,7 @@ fun AppRoot() {
     }
     Ui.share?.let { ShareDialog(it) }
     if (Ui.showSpotifyDialog) SpotifyImportDialog()
+    if (Ui.showYtDialog) YtMusicImportDialog()
     if (Ui.showSettings) SettingsDialog()
     if (Ui.showEq) EqualizerSheet()
     if (Ui.showCodeDialog) {

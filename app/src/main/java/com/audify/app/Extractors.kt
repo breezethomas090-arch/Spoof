@@ -38,6 +38,8 @@ object NewPipeSource {
 
     @Volatile private var ready = false
 
+    fun ensureInit() = init()
+
     @Synchronized
     private fun init() {
         if (ready) return
