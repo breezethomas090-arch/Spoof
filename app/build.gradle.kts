@@ -32,11 +32,23 @@ android {
         }
     }
 
+    // Same signing key for every build (kept in CI's private cache), so new APKs replace old ones
+    val keystorePath = System.getenv("AUDIFY_KEYSTORE")
+    signingConfigs {
+        if (keystorePath != null && file(keystorePath).exists()) {
+            create("audify") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("AUDIFY_KEY_PASS")
+                keyAlias = "audify"
+                keyPassword = System.getenv("AUDIFY_KEY_PASS")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Signed with the debug key so the APK installs straight away.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("audify") ?: signingConfigs.getByName("debug")
         }
     }
 
