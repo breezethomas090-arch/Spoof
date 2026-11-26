@@ -3,6 +3,9 @@ package com.audify.app
 import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,7 +49,16 @@ data class Song(
     }
 }
 
-data class Playlist(val id: String, val name: String, val songs: List<Song>)
+data class Playlist(
+    val id: String,
+    val name: String,
+    val songs: List<Song>,
+    val cover: String? = null,   // custom image file, or null for an auto-generated cover
+    val owner: String? = null,   // who shared it (null = you)
+)
+
+/** A public playlist on YouTube (other people's playlists). */
+data class RemotePlaylist(val id: String, val title: String, val channel: String, val thumb: String?, val count: Int)
 
 /** Liked songs, playlists and listening history, saved to a small JSON file. */
 object Store {
@@ -71,7 +83,12 @@ object Store {
             _history.value = o.optJSONArray("history").toSongs()
             val pl = o.optJSONArray("playlists") ?: JSONArray()
             _playlists.value = (0 until pl.length()).mapNotNull { i ->
-                pl.optJSONObject(i)?.let { Playlist(it.optString("id"), it.optString("name"), it.optJSONArray("songs").toSongs()) }
+                pl.optJSONObject(i)?.let {
+                    Playlist(
+                        it.optString("id"), it.optString("name"), it.optJSONArray("songs").toSongs(),
+                        it.optString("cover").ifEmpty { null }, it.optString("owner").ifEmpty { null },
+                    )
+                }
             }
         }
     }
@@ -84,6 +101,7 @@ object Store {
                 "playlists",
                 JSONArray(_playlists.value.map {
                     JSONObject().put("id", it.id).put("name", it.name).put("songs", JSONArray(it.songs.map { s -> s.toJson() }))
+                        .put("cover", it.cover ?: "").put("owner", it.owner ?: "")
                 })
             )
         val text = o.toString()
@@ -103,8 +121,8 @@ object Store {
         save()
     }
 
-    fun createPlaylist(name: String, songs: List<Song> = emptyList()): Playlist {
-        val p = Playlist(UUID.randomUUID().toString(), name.trim().ifEmpty { "My playlist" }, songs.distinctBy { it.id })
+    fun createPlaylist(name: String, songs: List<Song> = emptyList(), owner: String? = null): Playlist {
+        val p = Playlist(UUID.randomUUID().toString(), name.trim().ifEmpty { "My playlist" }, songs.distinctBy { it.id }, owner = owner)
         _playlists.update { it + p }
         save()
         return p
@@ -130,7 +148,21 @@ object Store {
         save()
     }
 
+    fun setPlaylistCover(playlistId: String, path: String?) {
+        _playlists.update { list ->
+            list.map {
+                if (it.id != playlistId) it
+                else {
+                    if (it.cover != null && it.cover != path) runCatching { File(it.cover).delete() }
+                    it.copy(cover = path)
+                }
+            }
+        }
+        save()
+    }
+
     fun deletePlaylist(playlistId: String) {
+        _playlists.value.firstOrNull { it.id == playlistId }?.cover?.let { runCatching { File(it).delete() } }
         _playlists.update { list -> list.filterNot { it.id == playlistId } }
         save()
     }
@@ -168,13 +200,14 @@ object AudifyCodes {
 
     sealed interface Parsed {
         data class Songs(val ids: List<String>) : Parsed
-        data class SharedPlaylist(val name: String, val ids: List<String>) : Parsed
+        data class SharedPlaylist(val name: String, val ids: List<String>, val by: String?) : Parsed
     }
 
     fun songCode(id: String) = "AU-$id"
     fun songUri(id: String) = "audify://s/$id"
-    fun playlistUri(p: Playlist) =
-        "audify://p/" + Uri.encode(p.name.take(60)) + "/" + p.songs.take(150).joinToString(",") { it.id }
+    fun playlistUri(p: Playlist, by: String) =
+        "audify://p/" + Uri.encode(p.name.take(40)) + "/" + p.songs.take(80).joinToString(",") { it.id } +
+            "?by=" + Uri.encode(by.take(30))
 
     fun parse(text: String): Parsed? {
         val t = text.trim()
@@ -182,8 +215,10 @@ object AudifyCodes {
         if (t.startsWith("audify://p/")) {
             val rest = t.removePrefix("audify://p/")
             val name = Uri.decode(rest.substringBefore('/'))
-            val ids = rest.substringAfter('/', "").split(',').filter { ID.matches(it) }
-            return if (ids.isEmpty()) null else Parsed.SharedPlaylist(name.ifBlank { "Shared playlist" }, ids)
+            val tail = rest.substringAfter('/', "")
+            val ids = tail.substringBefore('?').split(',').filter { ID.matches(it) }
+            val by = tail.substringAfter("?by=", "").let { Uri.decode(it) }.ifBlank { null }
+            return if (ids.isEmpty()) null else Parsed.SharedPlaylist(name.ifBlank { "Shared playlist" }, ids, by)
         }
         if (t.startsWith("audify://s/")) {
             val ids = t.removePrefix("audify://s/").split(',').filter { ID.matches(it) }
@@ -203,6 +238,38 @@ enum class Quality(val label: String, val detail: String) {
     SAVER("Data saver", "Opus ~64 kbps. Smallest files, and lighter streaming."),
 }
 
+enum class StreamQuality(val label: String, val detail: String) {
+    LOW("Data saver", "~50 kbps. Starts fastest, uses least data."),
+    NORMAL("Normal", "~70 kbps Opus. Quick to start, sounds great on phone speakers and earbuds."),
+    HIGH("High", "~130 kbps. Best sound, slightly slower to start."),
+}
+
+/** Your local Audify profile: name and picture, stored on this phone. */
+object Profile {
+    private lateinit var sp: SharedPreferences
+    var name by mutableStateOf("Listener")
+        private set
+    var avatar by mutableStateOf<String?>(null)
+        private set
+
+    fun init(ctx: Context) {
+        sp = ctx.getSharedPreferences("profile", Context.MODE_PRIVATE)
+        name = sp.getString("name", null) ?: "Listener"
+        avatar = sp.getString("avatar", null)?.takeIf { File(it).exists() }
+    }
+
+    fun setName(n: String) {
+        name = n.trim().take(30).ifEmpty { name }
+        sp.edit().putString("name", name).apply()
+    }
+
+    fun setAvatar(path: String?) {
+        avatar?.takeIf { it != path }?.let { runCatching { File(it).delete() } }
+        avatar = path
+        sp.edit().putString("avatar", path).apply()
+    }
+}
+
 object Prefs {
     private lateinit var sp: SharedPreferences
 
@@ -213,6 +280,10 @@ object Prefs {
     var keepVideo: Boolean
         get() = sp.getBoolean("keepVideo", false)
         set(v) = sp.edit().putBoolean("keepVideo", v).apply()
+
+    var streamQuality: StreamQuality
+        get() = runCatching { StreamQuality.valueOf(sp.getString("streamQuality", null) ?: "") }.getOrDefault(StreamQuality.NORMAL)
+        set(v) = sp.edit().putString("streamQuality", v.name).apply()
 
     var quality: Quality
         get() = runCatching { Quality.valueOf(sp.getString("quality", null) ?: "") }.getOrDefault(Quality.BEST)

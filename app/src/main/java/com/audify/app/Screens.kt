@@ -3,6 +3,9 @@
 package com.audify.app
 
 import android.app.Application
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -10,9 +13,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Clear
@@ -20,7 +26,8 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
@@ -32,12 +39,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -46,24 +57,89 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Calendar
+import java.io.File
 import kotlin.concurrent.thread
 
-private val MOODS = listOf("Top hits", "Pop", "Hip-hop", "R&B", "Chill", "Lo-fi", "Rock", "Workout", "Party", "Throwbacks", "Focus")
+private val GENRES = listOf(
+    "Pop" to listOf(Color(0xFFE11D48), Color(0xFFF97316)),
+    "Hip-hop" to listOf(Color(0xFF7C3AED), Color(0xFF2563EB)),
+    "R&B" to listOf(Color(0xFFDB2777), Color(0xFF7C3AED)),
+    "Chill" to listOf(Color(0xFF0D9488), Color(0xFF0EA5E9)),
+    "Lo-fi" to listOf(Color(0xFF6D28D9), Color(0xFF1E3A8A)),
+    "Rock" to listOf(Color(0xFF991B1B), Color(0xFF1F2937)),
+    "Workout" to listOf(Color(0xFFEA580C), Color(0xFFDC2626)),
+    "Party" to listOf(Color(0xFFC026D3), Color(0xFFF43F5E)),
+    "Throwbacks" to listOf(Color(0xFFB45309), Color(0xFF7C2D12)),
+    "Focus" to listOf(Color(0xFF334155), Color(0xFF0F766E)),
+    "Jazz" to listOf(Color(0xFF92400E), Color(0xFF1E293B)),
+    "Classical" to listOf(Color(0xFFF59E0B), Color(0xFFF97316)),
+)
+
+// ============================================================== shared bits
 
 @Composable
-private fun TopBar(content: @Composable RowScope.() -> Unit) {
+private fun SectionHeader(title: String, action: (@Composable () -> Unit)? = null) {
     Row(
-        Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp, top = 8.dp, bottom = 4.dp).height(52.dp),
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 28.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        content = content,
-    )
+    ) {
+        Text(title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        action?.invoke()
+    }
 }
 
 @Composable
-private fun CodeAndSettings() {
-    IconButton(onClick = { Ui.showCodeDialog = true }) { Icon(AppIcons.QrCode, contentDescription = "Enter Audify code") }
-    IconButton(onClick = { Ui.showSettings = true }) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
+private fun Pill(text: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(CircleShape)
+            .background(if (selected) Violet else MaterialTheme.colorScheme.surfaceContainerHighest)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Text(text, style = MaterialTheme.typography.labelLarge, color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+/** Big square card with a title underneath (playlists, public playlists). */
+@Composable
+private fun CoverCard(title: String, subtitle: String, width: Dp = 150.dp, onClick: () -> Unit, cover: @Composable () -> Unit) {
+    Column(Modifier.width(width).clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(4.dp)) {
+        cover()
+        Spacer(Modifier.height(8.dp))
+        Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (subtitle.isNotEmpty()) {
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+private class QuickTileSpec(val title: String, val onClick: () -> Unit, val cover: @Composable () -> Unit)
+
+/** Compact two-column shortcut tile, like Spotify's home grid. */
+@Composable
+private fun QuickTile(title: String, modifier: Modifier, onClick: () -> Unit, cover: @Composable () -> Unit) {
+    Row(
+        modifier
+            .height(56.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        cover()
+        Spacer(Modifier.width(10.dp))
+        Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
+    }
+}
+
+@Composable
+fun RemoteCover(r: RemotePlaylist, size: Dp) {
+    if (r.thumb != null) {
+        Artwork(r.thumb, Modifier.size(size), RoundedCornerShape(8.dp))
+    } else {
+        PlaylistCover(Playlist(r.id, r.title, emptyList()), size)
+    }
 }
 
 // ============================================================== home
@@ -73,47 +149,44 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var seed by mutableStateOf<Song?>(null)
         private set
-    var mood by mutableStateOf<String?>(null)
-        private set
     var loading by mutableStateOf(false)
         private set
     var error by mutableStateOf<String?>(null)
         private set
-    private var seq = 0
+    var publicLists by mutableStateOf<List<RemotePlaylist>>(emptyList())
+        private set
     private var loadedFor: String? = null
+    private var publicLoaded = false
 
-    /** Recommendations seeded from what you last played or liked. */
-    fun loadForYou(force: Boolean = false) {
-        val s = Store.history.value.firstOrNull()
-            ?: Store.liked.value.firstOrNull()
-            ?: Library.tracks.value.firstNotNullOfOrNull { it.toSong() }
-        if (s == null) {
-            if (recs.isEmpty() || force) loadMood(MOODS.first())
-            return
+    private fun pickSeed(): Song? = Store.history.value.firstOrNull()
+        ?: Store.liked.value.firstOrNull()
+        ?: Library.tracks.value.firstNotNullOfOrNull { it.toSong() }
+
+    fun load(force: Boolean = false) {
+        val s = pickSeed()
+        if (force || loadedFor != (s?.id ?: "none") || recs.isEmpty()) {
+            seed = s
+            loadedFor = s?.id ?: "none"
+            loading = true
+            error = null
+            viewModelScope.launch {
+                val r = runCatching {
+                    withContext(Dispatchers.IO) {
+                        if (s != null) Downloader.related(getApplication(), s.id)
+                        else Downloader.search(getApplication(), "top hits this week", 20)
+                    }
+                }
+                loading = false
+                r.onSuccess { recs = it }.onFailure { error = shortError(it) }
+            }
         }
-        if (!force && mood == null && loadedFor == s.id && recs.isNotEmpty()) return
-        seed = s
-        mood = null
-        loadedFor = s.id
-        fetch { Downloader.related(getApplication(), s.id) }
-    }
-
-    fun loadMood(m: String) {
-        mood = m
-        fetch { Downloader.search(getApplication(), "$m songs", 20) }
-    }
-
-    fun refresh() = if (mood != null) loadMood(mood!!) else loadForYou(force = true)
-
-    private fun fetch(block: () -> List<Song>) {
-        val mine = ++seq
-        loading = true
-        error = null
-        viewModelScope.launch {
-            val r = runCatching { withContext(Dispatchers.IO) { block() } }
-            if (mine != seq) return@launch
-            loading = false
-            r.onSuccess { recs = it }.onFailure { error = shortError(it) }
+        if (!publicLoaded || force) {
+            publicLoaded = true
+            val q = s?.artist?.takeIf { it.isNotBlank() }?.let { "$it mix playlist" } ?: "top hits playlist"
+            viewModelScope.launch {
+                runCatching { withContext(Dispatchers.IO) { Downloader.publicPlaylists(getApplication(), q) } }
+                    .onSuccess { publicLists = it }
+            }
         }
     }
 }
@@ -121,93 +194,130 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 @Composable
 fun HomeScreen(vm: HomeViewModel = viewModel()) {
     val history by Store.history.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { vm.loadForYou() }
-    val hasSeed = history.isNotEmpty() || Store.liked.value.isNotEmpty() || Library.tracks.value.any { it.videoId != null }
+    val liked by Store.liked.collectAsStateWithLifecycle()
+    val playlists by Store.playlists.collectAsStateWithLifecycle()
+    var filter by rememberSaveable { mutableIntStateOf(0) }   // 0 All, 1 Music, 2 Playlists
+    LaunchedEffect(Unit) { vm.load() }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
-            TopBar {
-                Wordmark(Modifier.weight(1f))
-                CodeAndSettings()
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Avatar(36.dp, Modifier.clip(CircleShape).clickable { Ui.detail = Detail.Account })
+                Spacer(Modifier.width(10.dp))
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Pill("All", filter == 0) { filter = 0 }
+                    Pill("Music", filter == 1) { filter = 1 }
+                    Pill("Playlists", filter == 2) { filter = 2 }
+                }
+                IconButton(onClick = { Ui.showCodeDialog = true }) { Icon(AppIcons.QrCode, contentDescription = "Enter Audify code") }
             }
         }
-        item {
-            Text(
-                greeting(),
-                style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 12.dp),
-            )
-        }
-        item {
-            LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (hasSeed) {
-                    item {
-                        FilterChip(
-                            selected = vm.mood == null,
-                            onClick = { vm.loadForYou(force = vm.mood != null) },
-                            label = { Text("For you") },
-                        )
-                    }
-                }
-                items(MOODS) { m ->
-                    FilterChip(selected = vm.mood == m, onClick = { vm.loadMood(m) }, label = { Text(m) })
-                }
-            }
-        }
-        if (history.isNotEmpty()) {
-            item { SectionTitle("Jump back in") }
+
+        // Quick-access grid
+        if (filter != 1) {
             item {
-                val recent = history.take(12)
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    itemsIndexed(recent, key = { _, s -> s.id }) { i, s ->
-                        SongCard(s) { PlayerConn.playSongs(recent, i) }
+                val tiles = ArrayList<QuickTileSpec>()
+                tiles += QuickTileSpec("Liked Songs", onClick = { Ui.detail = Detail.Liked }, cover = { IconTile(Icons.Rounded.Favorite, 56.dp, BrandBrush) })
+                playlists.take(5).forEach { p ->
+                    tiles += QuickTileSpec(p.name, onClick = { Ui.detail = Detail.PlaylistView(p.id) }, cover = { PlaylistCover(p, 56.dp, RoundedCornerShape(0.dp)) })
+                }
+                history.take((8 - tiles.size).coerceAtLeast(0)).forEachIndexed { i, s ->
+                    tiles += QuickTileSpec(s.title, onClick = { PlayerConn.playSongs(history, i) }, cover = { SongArt(s, Modifier.size(56.dp), RoundedCornerShape(0.dp)) })
+                }
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    tiles.chunked(2).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            row.forEach { t ->
+                                QuickTile(t.title, Modifier.weight(1f), onClick = t.onClick, cover = t.cover)
+                            }
+                            if (row.size == 1) Spacer(Modifier.weight(1f))
+                        }
                     }
                 }
             }
         }
-        item {
-            SectionTitle(
-                when {
-                    vm.mood != null -> vm.mood!!
-                    vm.seed != null -> "Because you played ${vm.seed!!.title}"
-                    else -> "Recommended"
-                },
-                action = {
-                    IconButton(onClick = { vm.refresh() }) {
+
+        if (filter != 2 && history.isNotEmpty()) {
+            item { SectionHeader("Recently played") }
+            item {
+                val recent = history.take(15)
+                LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    itemsIndexed(recent, key = { _, s -> "r:" + s.id }) { i, s -> SongCard(s) { PlayerConn.playSongs(recent, i) } }
+                }
+            }
+        }
+
+        if (filter != 2) {
+            item {
+                SectionHeader(vm.seed?.let { "More like ${it.artist.ifBlank { it.title }}" } ?: "Made for you") {
+                    IconButton(onClick = { vm.load(force = true) }) {
                         Icon(Icons.Rounded.Refresh, contentDescription = "Refresh", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                },
-            )
+                }
+            }
+            item {
+                when {
+                    vm.loading && vm.recs.isEmpty() -> Box(Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(strokeWidth = 2.dp)
+                    }
+                    vm.error != null && vm.recs.isEmpty() -> Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(vm.error ?: "", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                        TextButton(onClick = { vm.load(force = true) }) { Text("Try again") }
+                    }
+                    else -> LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        itemsIndexed(vm.recs, key = { _, s -> "m:" + s.id }) { i, s -> SongCard(s) { PlayerConn.playSongs(vm.recs, i) } }
+                    }
+                }
+            }
         }
-        when {
-            vm.loading -> item {
-                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(strokeWidth = 2.dp)
+
+        if (filter != 1 && playlists.isNotEmpty()) {
+            item { SectionHeader("Your playlists") }
+            item {
+                LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(playlists, key = { it.id }) { p ->
+                        CoverCard(p.name, "By ${p.owner ?: Profile.name}", onClick = { Ui.detail = Detail.PlaylistView(p.id) }) {
+                            PlaylistCover(p, 142.dp)
+                        }
+                    }
                 }
             }
-            vm.error != null -> item {
-                Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(vm.error ?: "", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                    TextButton(onClick = { vm.refresh() }) { Text("Try again") }
+        }
+
+        if (filter != 1 && vm.publicLists.isNotEmpty()) {
+            item { SectionHeader("Popular playlists") }
+            item {
+                LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(vm.publicLists, key = { "p:" + it.id }) { r ->
+                        CoverCard(r.title, r.channel, onClick = { Ui.detail = Detail.Remote(r) }) { RemoteCover(r, 142.dp) }
+                    }
                 }
             }
-            else -> itemsIndexed(vm.recs, key = { _, s -> "rec:" + s.id }) { i, s ->
-                SongRow(s, onClick = { PlayerConn.playSongs(vm.recs, i) })
+        }
+
+        if (filter == 2 && playlists.isEmpty() && vm.publicLists.isEmpty()) {
+            item { EmptyState(AppIcons.Playlist, "No playlists yet", "Tap Create to make one, or open a friend's Audify code.") }
+        }
+        if (liked.isEmpty() && history.isEmpty() && filter == 0) {
+            item {
+                Text(
+                    "Tip: play a few songs and Audify will start recommending music for you.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 20.dp),
+                )
             }
         }
     }
 }
 
-private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) {
-    in 5..11 -> "Good morning"
-    in 12..17 -> "Good afternoon"
-    else -> "Good evening"
-}
-
 // ============================================================== search
 
 fun isUrl(s: String) = s.startsWith("http://") || s.startsWith("https://") ||
-    s.contains("youtu.be/") || s.contains("youtube.com/")
+    s.contains("youtu.be/") || s.contains("youtube.com/") || s.startsWith("audify://")
 
 class SearchViewModel(app: Application) : AndroidViewModel(app) {
     var query by mutableStateOf("")
@@ -219,8 +329,7 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         private set
     private var seq = 0
 
-    fun search() {
-        val q = query.trim()
+    fun search(q: String = query.trim()) {
         if (q.isEmpty() || isUrl(q)) return
         val mine = ++seq
         loading = true
@@ -234,6 +343,14 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                 if (it.isEmpty()) error = "No results for \"$q\""
             }.onFailure { error = shortError(it) }
         }
+    }
+
+    fun clear() {
+        query = ""
+        results = emptyList()
+        error = null
+        seq++
+        loading = false
     }
 }
 
@@ -254,30 +371,35 @@ fun SearchScreen(vm: SearchViewModel = viewModel()) {
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
-            TopBar {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Avatar(36.dp, Modifier.clip(CircleShape).clickable { Ui.detail = Detail.Account })
+                Spacer(Modifier.width(12.dp))
                 Text("Search", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-                CodeAndSettings()
+                IconButton(onClick = { Ui.showCodeDialog = true }) { Icon(AppIcons.QrCode, contentDescription = "Enter Audify code") }
             }
         }
         item {
             TextField(
                 value = vm.query,
                 onValueChange = { vm.query = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                placeholder = { Text("What do you want to listen to?") },
-                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                placeholder = { Text("What do you want to listen to?", color = Color(0xFF555555)) },
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = Color(0xFF222222)) },
                 trailingIcon = {
                     if (vm.query.isNotEmpty()) {
-                        IconButton(onClick = { vm.query = "" }) { Icon(Icons.Rounded.Clear, contentDescription = "Clear") }
+                        IconButton(onClick = { vm.clear() }) { Icon(Icons.Rounded.Clear, contentDescription = "Clear", tint = Color(0xFF222222)) }
                     }
                 },
                 singleLine = true,
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(8.dp),
                 colors = TextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                    unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White,
+                    focusedTextColor = Color.Black,
+                    unfocusedTextColor = Color.Black,
+                    cursorColor = Violet,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
                 ),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { submit() }),
@@ -286,13 +408,13 @@ fun SearchScreen(vm: SearchViewModel = viewModel()) {
         when {
             isUrl(q) -> item {
                 Row(
-                    Modifier.fillMaxWidth().clickable { submit() }.padding(horizontal = 20.dp, vertical = 12.dp),
+                    Modifier.fillMaxWidth().clickable { submit() }.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconTile(Icons.Rounded.Search, 50.dp, BrandBrush)
+                    IconTile(AppIcons.QrCode, 50.dp, BrandBrush)
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("Play this link", style = MaterialTheme.typography.bodyLarge)
+                        Text("Open this link", style = MaterialTheme.typography.bodyLarge)
                         Text(q, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
@@ -302,20 +424,37 @@ fun SearchScreen(vm: SearchViewModel = viewModel()) {
                     CircularProgressIndicator(strokeWidth = 2.dp)
                     if (!Downloader.ready) {
                         Spacer(Modifier.height(12.dp))
-                        Text("Getting ready — the first search takes a little longer", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Getting ready: the first search takes a little longer", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
             vm.error != null -> item {
-                Text(
-                    vm.error ?: "",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(32.dp),
-                )
+                Text(vm.error ?: "", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(32.dp))
             }
-            vm.results.isEmpty() -> item {
-                EmptyState(Icons.Rounded.Search, "Search millions of songs", "Tap a result to stream it instantly, or download it to listen offline.")
+            vm.results.isEmpty() -> {
+                item {
+                    Text("Browse all", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 12.dp))
+                }
+                items(GENRES.chunked(2)) { row ->
+                    Row(Modifier.padding(horizontal = 16.dp, vertical = 5.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        row.forEach { (name, colors) ->
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .height(96.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Brush.linearGradient(colors))
+                                    .clickable {
+                                        vm.query = name
+                                        vm.search("$name songs")
+                                    }
+                                    .padding(12.dp),
+                            ) {
+                                Text(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.White)
+                            }
+                        }
+                    }
+                }
             }
             else -> itemsIndexed(vm.results, key = { _, s -> s.id }) { i, s ->
                 SongRow(s, onClick = { PlayerConn.playSongs(vm.results, i) })
@@ -332,48 +471,51 @@ fun LibraryScreen() {
     val playlists by Store.playlists.collectAsStateWithLifecycle()
     val tracks by Library.tracks.collectAsStateWithLifecycle()
     val jobs by Downloads.jobs.collectAsStateWithLifecycle()
+    var filter by rememberSaveable { mutableIntStateOf(0) }   // 0 all, 1 playlists, 2 downloaded
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
-            TopBar {
-                Text("Library", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Avatar(36.dp, Modifier.clip(CircleShape).clickable { Ui.detail = Detail.Account })
+                Spacer(Modifier.width(12.dp))
+                Text("Your Library", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
                 IconButton(onClick = { Ui.newPlaylistFor = emptyList() }) { Icon(Icons.Rounded.Add, contentDescription = "New playlist") }
                 IconButton(onClick = { Ui.showSettings = true }) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
             }
         }
+        item {
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Pill("Playlists", filter == 1) { filter = if (filter == 1) 0 else 1 }
+                Pill("Downloaded", filter == 2) { filter = if (filter == 2) 0 else 2 }
+            }
+        }
         if (jobs.isNotEmpty()) {
-            item { SectionTitle("Downloading") }
+            item { Text("Downloading", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 16.dp, top = 8.dp)) }
             items(jobs.values.toList(), key = { "job:" + it.key }) { JobRow(it) }
         }
-        item { Spacer(Modifier.height(8.dp)) }
-        item {
-            CollectionRow(
-                tile = { IconTile(Icons.Rounded.Favorite, 56.dp, BrandBrush) },
-                title = "Liked songs",
-                subtitle = "${liked.size} songs",
-            ) { Ui.detail = Detail.Liked }
+        if (filter != 2) {
+            item {
+                CollectionRow({ IconTile(Icons.Rounded.Favorite, 64.dp, BrandBrush) }, "Liked Songs", "Playlist · ${liked.size} songs") {
+                    Ui.detail = Detail.Liked
+                }
+            }
         }
-        item {
-            CollectionRow(
-                tile = { IconTile(AppIcons.DownloadDone, 56.dp) },
-                title = "Downloads",
-                subtitle = "${tracks.size} songs · offline",
-            ) { Ui.detail = Detail.Downloaded }
+        if (filter != 1) {
+            item {
+                CollectionRow({ IconTile(AppIcons.DownloadDone, 64.dp, Brush.linearGradient(listOf(Color(0xFF10B981), Color(0xFF0F766E)))) }, "Downloads", "${tracks.size} songs · offline") {
+                    Ui.detail = Detail.Downloaded
+                }
+            }
         }
-        item { SectionTitle("Playlists") }
-        items(playlists, key = { it.id }) { p ->
-            CollectionRow(
-                tile = { PlaylistCover(p, 56.dp) },
-                title = p.name,
-                subtitle = "Playlist · ${p.songs.size} songs",
-            ) { Ui.detail = Detail.PlaylistView(p.id) }
-        }
-        item {
-            CollectionRow(
-                tile = { IconTile(Icons.Rounded.Add, 56.dp) },
-                title = "New playlist",
-                subtitle = "",
-            ) { Ui.newPlaylistFor = emptyList() }
+        if (filter != 2) {
+            items(playlists, key = { it.id }) { p ->
+                CollectionRow({ PlaylistCover(p, 64.dp) }, p.name, "Playlist · ${p.owner ?: Profile.name}") {
+                    Ui.detail = Detail.PlaylistView(p.id)
+                }
+            }
+            item {
+                CollectionRow({ IconTile(Icons.Rounded.Add, 64.dp) }, "Create playlist", "") { Ui.newPlaylistFor = emptyList() }
+            }
         }
     }
 }
@@ -381,15 +523,15 @@ fun LibraryScreen() {
 @Composable
 private fun CollectionRow(tile: @Composable () -> Unit, title: String, subtitle: String, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         tile()
-        Spacer(Modifier.width(16.dp))
+        Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (subtitle.isNotEmpty()) {
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             }
         }
     }
@@ -399,7 +541,7 @@ private fun CollectionRow(tile: @Composable () -> Unit, title: String, subtitle:
 fun JobRow(job: DlJob) {
     val ctx = LocalContext.current
     val failed = job.state as? DlState.Failed
-    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(job.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -439,111 +581,209 @@ fun DetailScreen(d: Detail) {
         Detail.Liked -> {
             val liked by Store.liked.collectAsStateWithLifecycle()
             SongCollection(
-                title = "Liked songs",
+                title = "Liked Songs",
                 subtitle = "${liked.size} songs",
-                cover = { IconTile(Icons.Rounded.Favorite, 180.dp, BrandBrush) },
+                colorModel = null,
+                cover = { IconTile(Icons.Rounded.Favorite, 200.dp, BrandBrush) },
                 songs = liked,
                 emptyText = "Tap ♡ on any song to save it here.",
             )
         }
         Detail.Downloaded -> DownloadsScreen()
-        is Detail.PlaylistView -> {
-            val playlists by Store.playlists.collectAsStateWithLifecycle()
-            val p = playlists.firstOrNull { it.id == d.id }
-            if (p == null) {
-                LaunchedEffect(Unit) { Ui.detail = null }
-                return
+        Detail.Account -> AccountScreen()
+        is Detail.Remote -> RemotePlaylistScreen(d.playlist)
+        is Detail.PlaylistView -> PlaylistScreen(d.id)
+    }
+}
+
+@Composable
+private fun PlaylistScreen(id: String) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val playlists by Store.playlists.collectAsStateWithLifecycle()
+    val p = playlists.firstOrNull { it.id == id }
+    if (p == null) {
+        LaunchedEffect(Unit) { Ui.detail = null }
+        return
+    }
+    var menu by remember { mutableStateOf(false) }
+    var rename by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) scope.launch {
+            val path = withContext(Dispatchers.IO) { saveImage(ctx, uri, "covers", p.id) }
+            if (path != null) Store.setPlaylistCover(p.id, path) else Ui.toast(ctx, "Couldn't use that image")
+        }
+    }
+
+    SongCollection(
+        title = p.name,
+        subtitle = "${p.owner ?: Profile.name} · ${p.songs.size} songs",
+        colorModel = p.cover?.let { File(it) } ?: p.songs.firstOrNull()?.thumb,
+        cover = { PlaylistCover(p, 200.dp) },
+        songs = p.songs,
+        playlistId = p.id,
+        emptyText = "Add songs from the ⋮ menu on any song.",
+        actions = {
+            IconButton(onClick = { Ui.sharePlaylist(p) }, enabled = p.songs.isNotEmpty()) {
+                Icon(Icons.Rounded.Share, contentDescription = "Share playlist")
             }
-            var menu by remember { mutableStateOf(false) }
-            var rename by remember { mutableStateOf(false) }
-            var confirmDelete by remember { mutableStateOf(false) }
-            SongCollection(
-                title = p.name,
-                subtitle = "Playlist · ${p.songs.size} songs",
-                cover = { PlaylistCover(p, 180.dp) },
-                songs = p.songs,
-                playlistId = p.id,
-                emptyText = "Add songs from the ⋮ menu on any song.",
-                actions = {
-                    IconButton(onClick = { Ui.sharePlaylist(p) }, enabled = p.songs.isNotEmpty()) {
-                        Icon(Icons.Rounded.Share, contentDescription = "Share playlist")
+            Box {
+                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = "More") }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Change image") },
+                        leadingIcon = { Icon(Icons.Rounded.Edit, null) },
+                        onClick = {
+                            menu = false
+                            picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
+                    )
+                    if (p.cover != null) {
+                        DropdownMenuItem(
+                            text = { Text("Use automatic cover") },
+                            leadingIcon = { Icon(Icons.Rounded.Refresh, null) },
+                            onClick = {
+                                menu = false
+                                Store.setPlaylistCover(p.id, null)
+                            },
+                        )
                     }
-                    Box {
-                        IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = "More") }
-                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Rename") },
-                                leadingIcon = { Icon(Icons.Rounded.Edit, null) },
-                                onClick = { menu = false; rename = true },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Delete playlist") },
-                                leadingIcon = { Icon(Icons.Rounded.Delete, null) },
-                                onClick = { menu = false; confirmDelete = true },
-                            )
-                        }
-                    }
-                },
-            )
-            if (rename) {
-                NameDialog("Rename playlist", p.name, "Save", onDismiss = { rename = false }) {
-                    Store.renamePlaylist(p.id, it)
-                    rename = false
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        leadingIcon = { Icon(Icons.Rounded.Edit, null) },
+                        onClick = { menu = false; rename = true },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete playlist") },
+                        leadingIcon = { Icon(Icons.Rounded.Delete, null) },
+                        onClick = { menu = false; confirmDelete = true },
+                    )
                 }
             }
-            if (confirmDelete) {
-                AlertDialog(
-                    onDismissRequest = { confirmDelete = false },
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    title = { Text("Delete \"${p.name}\"?") },
-                    text = { Text("The songs stay in your library.") },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            confirmDelete = false
-                            Ui.detail = null
-                            Store.deletePlaylist(p.id)
-                        }) { Text("Delete") }
-                    },
-                    dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
-                )
-            }
+        },
+    )
+    if (rename) {
+        NameDialog("Rename playlist", p.name, "Save", onDismiss = { rename = false }) {
+            Store.renamePlaylist(p.id, it)
+            rename = false
+        }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            title = { Text("Delete \"${p.name}\"?") },
+            text = { Text("The songs stay in your library.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    Ui.detail = null
+                    Store.deletePlaylist(p.id)
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+class RemoteViewModel(app: Application) : AndroidViewModel(app) {
+    var songs by mutableStateOf<List<Song>>(emptyList())
+        private set
+    var loading by mutableStateOf(true)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
+    private var loadedId: String? = null
+
+    fun load(id: String) {
+        if (loadedId == id) return
+        loadedId = id
+        loading = true
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { Downloader.playlistSongs(getApplication(), id) } }
+                .onSuccess { songs = it }
+                .onFailure { error = shortError(it) }
+            loading = false
         }
     }
 }
 
 @Composable
+private fun RemotePlaylistScreen(r: RemotePlaylist) {
+    val ctx = LocalContext.current
+    val vm: RemoteViewModel = viewModel(key = "remote:" + r.id)
+    LaunchedEffect(r.id) { vm.load(r.id) }
+    val playlists by Store.playlists.collectAsStateWithLifecycle()
+    val saved = playlists.any { it.name == r.title && it.owner == r.channel.ifBlank { "YouTube" } }
+
+    SongCollection(
+        title = r.title,
+        subtitle = listOf(r.channel.ifBlank { "YouTube" }, if (vm.songs.isNotEmpty()) "${vm.songs.size} songs" else "").filter { it.isNotEmpty() }.joinToString(" · "),
+        colorModel = r.thumb ?: vm.songs.firstOrNull()?.thumb,
+        cover = {
+            if (r.thumb != null) RemoteCover(r, 200.dp)
+            else PlaylistCover(Playlist(r.id, r.title, vm.songs), 200.dp)
+        },
+        songs = vm.songs,
+        emptyText = if (vm.loading) "" else (vm.error ?: "This playlist is empty."),
+        loading = vm.loading,
+        actions = {
+            IconButton(
+                enabled = vm.songs.isNotEmpty() && !saved,
+                onClick = {
+                    Store.createPlaylist(r.title, vm.songs, owner = r.channel.ifBlank { "YouTube" })
+                    Ui.toast(ctx, "Saved to Your Library")
+                },
+            ) {
+                Icon(
+                    if (saved) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                    contentDescription = "Save to library",
+                    tint = if (saved) Pink else MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        },
+    )
+}
+
+/** Spotify-style header: tinted gradient, big cover, title, actions and a play button. */
+@Composable
 private fun DetailHeader(
     title: String,
     subtitle: String,
+    colorModel: Any?,
     cover: @Composable () -> Unit,
     canPlay: Boolean,
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
     actions: @Composable RowScope.() -> Unit,
 ) {
-    Column {
+    val tint by rememberArtColor(colorModel)
+    Column(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(tint, Color.Black)))) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { Ui.detail = null }) {
-                Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Back", modifier = Modifier.rotate(90f))
+                Icon(Icons.Rounded.KeyboardArrowLeft, contentDescription = "Back", modifier = Modifier.size(30.dp))
             }
-            Spacer(Modifier.weight(1f))
-            actions()
         }
-        Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 20.dp), contentAlignment = Alignment.Center) { cover() }
-        Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+        Box(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 20.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.shadow(20.dp, RoundedCornerShape(8.dp))) { cover() }
+        }
+        Column(Modifier.padding(horizontal = 16.dp)) {
+            Text(title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(4.dp))
+            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Row(Modifier.padding(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            actions()
+            Spacer(Modifier.weight(1f))
             if (canPlay) {
                 IconButton(onClick = onShuffle) {
-                    Icon(AppIcons.Shuffle, contentDescription = "Shuffle", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(AppIcons.Shuffle, contentDescription = "Shuffle", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(28.dp))
                 }
-                Spacer(Modifier.width(4.dp))
-                GradientPlayButton(52.dp, playing = false, onClick = onPlay)
+                Spacer(Modifier.width(8.dp))
+                GradientPlayButton(56.dp, playing = false, onClick = onPlay)
             }
         }
-        Spacer(Modifier.height(12.dp))
     }
 }
 
@@ -551,23 +791,29 @@ private fun DetailHeader(
 private fun SongCollection(
     title: String,
     subtitle: String,
+    colorModel: Any?,
     cover: @Composable () -> Unit,
     songs: List<Song>,
     emptyText: String,
     playlistId: String? = null,
+    loading: Boolean = false,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
             DetailHeader(
-                title, subtitle, cover,
+                title, subtitle, colorModel, cover,
                 canPlay = songs.isNotEmpty(),
                 onPlay = { PlayerConn.playSongs(songs, 0) },
                 onShuffle = { PlayerConn.playSongs(songs, songs.indices.random(), shuffled = true) },
                 actions = actions,
             )
         }
-        if (songs.isEmpty()) {
+        if (loading) {
+            item {
+                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(strokeWidth = 2.dp) }
+            }
+        } else if (songs.isEmpty() && emptyText.isNotEmpty()) {
             item { EmptyState(AppIcons.MusicNote, "Nothing here yet", emptyText) }
         }
         itemsIndexed(songs, key = { _, s -> s.id }) { i, s ->
@@ -585,7 +831,8 @@ private fun DownloadsScreen() {
         item {
             DetailHeader(
                 "Downloads", "${tracks.size} songs · available offline",
-                cover = { IconTile(AppIcons.DownloadDone, 180.dp) },
+                colorModel = null,
+                cover = { IconTile(AppIcons.DownloadDone, 200.dp, Brush.linearGradient(listOf(Color(0xFF10B981), Color(0xFF0F766E)))) },
                 canPlay = tracks.isNotEmpty(),
                 onPlay = { PlayerConn.playTracks(tracks, 0) },
                 onShuffle = { PlayerConn.playTracks(tracks, tracks.indices.random(), shuffled = true) },
@@ -598,10 +845,10 @@ private fun DownloadsScreen() {
         itemsIndexed(tracks, key = { _, t -> t.path }) { i, t ->
             val isCurrent = PlayerConn.current?.mediaId == t.path
             Row(
-                Modifier.fillMaxWidth().clickable { PlayerConn.playTracks(tracks, i) }.padding(start = 20.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                Modifier.fillMaxWidth().clickable { PlayerConn.playTracks(tracks, i) }.padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Artwork(t.cover ?: t.toSong()?.thumb, Modifier.size(50.dp), RoundedCornerShape(6.dp))
+                Artwork(t.cover ?: t.toSong()?.thumb, Modifier.size(50.dp), RoundedCornerShape(4.dp))
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -612,7 +859,7 @@ private fun DownloadsScreen() {
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        listOf(t.artist.ifBlank { "Unknown artist" }, t.file.extension.uppercase()).joinToString("  ·  "),
+                        listOf(t.artist.ifBlank { "Unknown artist" }, t.file.extension.uppercase()).joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -640,5 +887,112 @@ private fun DownloadsScreen() {
             },
             dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Cancel") } },
         )
+    }
+}
+
+// ============================================================== account
+
+@Composable
+private fun AccountScreen() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val liked by Store.liked.collectAsStateWithLifecycle()
+    val playlists by Store.playlists.collectAsStateWithLifecycle()
+    val tracks by Library.tracks.collectAsStateWithLifecycle()
+    var editName by remember { mutableStateOf(false) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) scope.launch {
+            val path = withContext(Dispatchers.IO) { saveImage(ctx, uri, "avatars", "avatar", 512) }
+            if (path != null) Profile.setAvatar(path) else Ui.toast(ctx, "Couldn't use that image")
+        }
+    }
+    val pickPhoto = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+    val tint by rememberArtColor(Profile.avatar?.let { File(it) })
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Column(
+            Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(tint, Color.Black))),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Row(Modifier.fillMaxWidth().padding(4.dp)) {
+                IconButton(onClick = { Ui.detail = null }) {
+                    Icon(Icons.Rounded.KeyboardArrowLeft, contentDescription = "Back", modifier = Modifier.size(30.dp))
+                }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = { Ui.showSettings = true }) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
+            }
+            Box(contentAlignment = Alignment.BottomEnd) {
+                Avatar(132.dp, Modifier.shadow(16.dp, CircleShape).clip(CircleShape).clickable { pickPhoto() })
+                Box(
+                    Modifier.size(36.dp).clip(CircleShape).background(Color.White).clickable { pickPhoto() },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Rounded.Edit, contentDescription = "Change photo", tint = Color.Black, modifier = Modifier.size(18.dp)) }
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(Profile.name, style = MaterialTheme.typography.headlineMedium)
+                IconButton(onClick = { editName = true }) { Icon(Icons.Rounded.Edit, contentDescription = "Edit name", modifier = Modifier.size(20.dp)) }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.padding(bottom = 24.dp), horizontalArrangement = Arrangement.spacedBy(36.dp)) {
+                Stat(liked.size, "Liked")
+                Stat(playlists.size, "Playlists")
+                Stat(tracks.size, "Downloads")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(bottom = 12.dp)) {
+                OutlinedButton(onClick = { editName = true }) { Text("Edit profile") }
+                if (Profile.avatar != null) OutlinedButton(onClick = { Profile.setAvatar(null) }) { Text("Remove photo") }
+            }
+        }
+        if (playlists.isNotEmpty()) {
+            Text("Your playlists", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp))
+            playlists.forEach { p ->
+                CollectionRow({ PlaylistCover(p, 56.dp) }, p.name, "${p.songs.size} songs") { Ui.detail = Detail.PlaylistView(p.id) }
+            }
+        }
+        Text(
+            "Your profile is saved on this phone. Your name appears when you share songs and playlists with friends.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(16.dp),
+        )
+        Spacer(Modifier.height(24.dp))
+    }
+
+    if (editName) {
+        var name by remember { mutableStateOf(Profile.name) }
+        AlertDialog(
+            onDismissRequest = { editName = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            title = { Text("Edit profile") },
+            text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    Avatar(88.dp, Modifier.clip(CircleShape).clickable { pickPhoto() })
+                    TextButton(onClick = { pickPhoto() }) { Text("Change photo") }
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it.take(30) },
+                        singleLine = true,
+                        label = { Text("Username") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    Profile.setName(name)
+                    editName = false
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { editName = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun Stat(n: Int, label: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("$n", style = MaterialTheme.typography.titleLarge)
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

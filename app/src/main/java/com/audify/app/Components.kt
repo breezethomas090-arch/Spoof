@@ -240,3 +240,59 @@ fun fmtMs(ms: Long): String = fmtSec((ms / 1000).toInt())
 fun fmtSec(s: Int): String =
     if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s % 3600 / 60, s % 60)
     else "%d:%02d".format(s / 60, s % 60)
+
+// ============================================================== playlist covers & avatars
+
+private val COVER_GRADIENTS = listOf(
+    listOf(Color(0xFF8B5CF6), Color(0xFFEC4899)),
+    listOf(Color(0xFF0EA5E9), Color(0xFF4F46E5)),
+    listOf(Color(0xFFF97316), Color(0xFFE11D48)),
+    listOf(Color(0xFF10B981), Color(0xFF0F766E)),
+    listOf(Color(0xFFF59E0B), Color(0xFFB45309)),
+    listOf(Color(0xFF64748B), Color(0xFF1E293B)),
+)
+
+/**
+ * Playlist cover: your custom image if you set one, otherwise auto-generated from its songs
+ * (a 2×2 mosaic with 4+ songs, the first song's art with 1–3, or a gradient with an icon when empty).
+ */
+@Composable
+fun PlaylistCover(p: Playlist, size: Dp, shape: Shape = RoundedCornerShape(8.dp)) {
+    if (p.cover != null) {
+        Artwork(java.io.File(p.cover), Modifier.size(size), shape)
+        return
+    }
+    val songs = p.songs.filter { it.title != "Loading…" }.distinctBy { it.id }
+    when {
+        songs.size >= 4 -> Column(Modifier.size(size).clip(shape)) {
+            for (row in 0..1) Row(Modifier.weight(1f)) {
+                for (col in 0..1) SongArt(songs[row * 2 + col], Modifier.weight(1f).fillMaxHeight(), RoundedCornerShape(0.dp))
+            }
+        }
+        songs.isNotEmpty() -> SongArt(songs.first(), Modifier.size(size), shape)
+        else -> {
+            val colors = COVER_GRADIENTS[(p.name.hashCode() and 0x7fffffff) % COVER_GRADIENTS.size]
+            Box(Modifier.size(size).clip(shape).background(Brush.linearGradient(colors)), contentAlignment = Alignment.Center) {
+                Icon(AppIcons.Playlist, contentDescription = null, tint = Color.White, modifier = Modifier.size(size * 0.4f))
+            }
+        }
+    }
+}
+
+/** Your profile picture, or your initial on a gradient. */
+@Composable
+fun Avatar(size: Dp, modifier: Modifier = Modifier) {
+    val path = Profile.avatar
+    if (path != null) {
+        Artwork(java.io.File(path), modifier.size(size), CircleShape)
+    } else {
+        Box(modifier.size(size).clip(CircleShape).background(BrandBrush), contentAlignment = Alignment.Center) {
+            Text(
+                Profile.name.take(1).uppercase(),
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                style = if (size >= 80.dp) MaterialTheme.typography.displaySmall else MaterialTheme.typography.titleMedium,
+            )
+        }
+    }
+}

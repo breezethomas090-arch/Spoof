@@ -22,6 +22,7 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaController
@@ -41,6 +42,24 @@ object Streams {
     private val cache = ConcurrentHashMap<String, Entry>()
 
     fun clear() = cache.clear()
+
+    private val prefetcher = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val pending = ConcurrentHashMap.newKeySet<String>()
+
+    /** Resolve upcoming songs in the background so they start instantly. */
+    fun prefetch(ctx: Context, id: String) {
+        val now = System.currentTimeMillis()
+        if (cache[id]?.let { now - it.at < TTL_MS } == true || !pending.add(id)) return
+        prefetcher.execute {
+            try {
+                val (url, ua) = Downloader.streamInfo(ctx, id)
+                cache[id] = Entry(url, ua, System.currentTimeMillis())
+            } catch (_: Exception) {
+            } finally {
+                pending.remove(id)
+            }
+        }
+    }
 
     @OptIn(UnstableApi::class)
     fun resolve(ctx: Context, spec: DataSpec): DataSpec {
@@ -80,8 +99,14 @@ class PlaybackService : MediaSessionService() {
         val upstream = DefaultDataSource.Factory(this, http)
         val resolving = ResolvingDataSource.Factory(upstream) { spec -> Streams.resolve(applicationContext, spec) }
 
+        // Start playing after 1s of audio is buffered (default is 2.5s) so streams start sooner
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(15_000, 60_000, 1_000, 2_000)
+            .build()
+
         val player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(resolving))
+            .setLoadControl(loadControl)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -105,6 +130,15 @@ class PlaybackService : MediaSessionService() {
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 retried = false
+                prefetchUpcoming(player)
+            }
+
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                prefetchUpcoming(player)
+            }
+
+            override fun onEvents(p: Player, events: Player.Events) {
+                AudifyWidget.update(applicationContext, p)
             }
         })
 
@@ -127,6 +161,17 @@ class PlaybackService : MediaSessionService() {
             .build()
     }
 
+    private fun prefetchUpcoming(player: Player) {
+        if (player.mediaItemCount == 0) return
+        var idx = player.currentMediaItemIndex
+        repeat(2) {
+            idx = player.currentTimeline.getNextWindowIndex(idx, player.repeatMode, player.shuffleModeEnabled)
+            if (idx == C.INDEX_UNSET) return
+            val mediaId = player.getMediaItemAt(idx).mediaId
+            if (mediaId.startsWith("yt:")) Streams.prefetch(applicationContext, mediaId.removePrefix("yt:"))
+        }
+    }
+
     private fun MediaItem.withUri(): MediaItem {
         val uri = if (mediaId.startsWith("yt:")) Uri.parse("ytid:" + mediaId.removePrefix("yt:"))
         else Uri.fromFile(File(mediaId))
@@ -141,6 +186,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        AudifyWidget.clear(applicationContext)
         session?.run {
             player.release()
             release()

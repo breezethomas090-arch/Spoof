@@ -14,6 +14,8 @@ sealed interface Detail {
     data object Liked : Detail
     data object Downloaded : Detail
     data class PlaylistView(val id: String) : Detail
+    data class Remote(val playlist: RemotePlaylist) : Detail
+    data object Account : Detail
 }
 
 data class SongMenuTarget(val song: Song, val playlistId: String? = null)
@@ -51,19 +53,19 @@ object Ui {
             subtitle = s.artist,
             qrContent = AudifyCodes.songUri(s.id),
             code = AudifyCodes.songCode(s.id),
-            shareText = "🎵 ${s.title}${if (s.artist.isNotBlank()) " — ${s.artist}" else ""}\n" +
+            shareText = "🎵 ${Profile.name} shared ${s.title}${if (s.artist.isNotBlank()) " — ${s.artist}" else ""}\n" +
                 "Open it in Audify with code ${AudifyCodes.songCode(s.id)}\n${s.url}",
         )
     }
 
     fun sharePlaylist(p: Playlist) {
-        val uri = AudifyCodes.playlistUri(p)
+        val uri = AudifyCodes.playlistUri(p, Profile.name)
         share = ShareTarget(
             title = p.name,
             subtitle = "${p.songs.size} songs",
             qrContent = uri,
             code = null,
-            shareText = "🎧 \"${p.name}\" on Audify (${p.songs.size} songs)\n" +
+            shareText = "🎧 \"${p.name}\" by ${Profile.name} on Audify (${p.songs.size} songs)\n" +
                 "Paste this into Audify → Enter code:\n$uri",
         )
     }
@@ -93,7 +95,7 @@ object Ui {
                 }
             }
             is AudifyCodes.Parsed.SharedPlaylist -> {
-                val p = Store.createPlaylist(parsed.name, parsed.ids.map { Song(it, "Loading…", "") })
+                val p = Store.createPlaylist(parsed.name, parsed.ids.map { Song(it, "Loading…", "") }, owner = parsed.by ?: "a friend")
                 tab = 2
                 detail = Detail.PlaylistView(p.id)
                 toast(app, "Added \"${p.name}\" to your library")

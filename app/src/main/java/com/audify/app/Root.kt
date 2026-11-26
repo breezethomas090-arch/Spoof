@@ -7,14 +7,17 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -35,22 +38,27 @@ fun AppRoot() {
     val tabs = listOf(
         TabSpec("Home", Icons.Rounded.Home),
         TabSpec("Search", Icons.Rounded.Search),
-        TabSpec("Library", AppIcons.Library),
+        TabSpec("Your Library", AppIcons.Library),
+        TabSpec("Create", Icons.Rounded.Add),
     )
 
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
-                Column {
+                Column(Modifier.background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f), Color.Black)))) {
                     if (PlayerConn.current != null) MiniPlayer()
-                    NavigationBar(containerColor = Color.Black, tonalElevation = 0.dp) {
+                    NavigationBar(containerColor = Color.Transparent, tonalElevation = 0.dp) {
                         tabs.forEachIndexed { i, t ->
                             NavigationBarItem(
-                                selected = Ui.tab == i && Ui.detail == null,
+                                selected = i < 3 && Ui.tab == i && Ui.detail == null,
                                 onClick = {
-                                    Ui.tab = i
-                                    Ui.detail = null
+                                    if (i == 3) {
+                                        Ui.newPlaylistFor = emptyList()
+                                    } else {
+                                        Ui.tab = i
+                                        Ui.detail = null
+                                    }
                                 },
                                 icon = {
                                     if (i == 2 && jobs.isNotEmpty()) {
@@ -59,7 +67,7 @@ fun AppRoot() {
                                         Icon(t.icon, contentDescription = null)
                                     }
                                 },
-                                label = { Text(t.label) },
+                                label = { Text(t.label, style = MaterialTheme.typography.labelSmall) },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = Color.White,
                                     selectedTextColor = Color.White,
@@ -118,6 +126,8 @@ fun AppRoot() {
             val p = Store.createPlaylist(name, songs)
             Ui.newPlaylistFor = null
             if (songs.isNotEmpty()) Ui.toast(ctx, "Added to ${p.name}")
+            Ui.tab = 2
+            Ui.detail = Detail.PlaylistView(p.id)
         }
     }
     Ui.share?.let { ShareDialog(it) }

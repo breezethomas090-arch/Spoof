@@ -8,6 +8,7 @@ class App : Application() {
         super.onCreate()
         Prefs.init(this)
         Store.init(this)
+        Profile.init(this)
         thread(name = "startup") {
             Library.refresh(this)
             // Unpack yt-dlp / Python / ffmpeg now so the first search is quicker

@@ -9,6 +9,13 @@ import android.content.Intent
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -39,9 +46,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.EncodeHintType
-import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -163,13 +167,6 @@ private fun PlaylistPickRow(p: Playlist?, title: String, subtitle: String, onCli
 }
 
 @Composable
-fun PlaylistCover(p: Playlist, size: androidx.compose.ui.unit.Dp) {
-    val first = p.songs.firstOrNull { it.title != "Loading…" } ?: p.songs.firstOrNull()
-    if (first == null) IconTile(AppIcons.Playlist, size)
-    else SongArt(first, Modifier.size(size), RoundedCornerShape(8.dp))
-}
-
-@Composable
 fun NameDialog(title: String, initial: String, confirm: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var name by remember { mutableStateOf(initial) }
     AlertDialog(
@@ -193,15 +190,6 @@ fun NameDialog(title: String, initial: String, confirm: String, onDismiss: () ->
 
 // ============================================================== share & codes
 
-fun qrBitmap(content: String, size: Int = 720): Bitmap {
-    val hints = mapOf(EncodeHintType.MARGIN to 1, EncodeHintType.CHARACTER_SET to "UTF-8")
-    val m = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, size, size, hints)
-    val px = IntArray(m.width * m.height) { i ->
-        if (m.get(i % m.width, i / m.width)) android.graphics.Color.BLACK else android.graphics.Color.WHITE
-    }
-    return Bitmap.createBitmap(px, m.width, m.height, Bitmap.Config.ARGB_8888)
-}
-
 private fun copy(ctx: Context, text: String) {
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("Audify", text))
@@ -211,22 +199,44 @@ private fun copy(ctx: Context, text: String) {
 @Composable
 fun ShareDialog(t: ShareTarget) {
     val ctx = LocalContext.current
-    val qr = remember(t.qrContent) { runCatching { qrBitmap(t.qrContent) }.getOrNull() }
+    var themeIdx by rememberSaveable { mutableIntStateOf(0) }
+    val theme = QR_THEMES[themeIdx]
+    val qr by produceState<Bitmap?>(null, t.qrContent, themeIdx) {
+        value = withContext(Dispatchers.Default) { runCatching { styledQr(t.qrContent, theme) }.getOrNull() }
+    }
     Dialog(onDismissRequest = { Ui.share = null }) {
         Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-            Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Wordmark()
-                Spacer(Modifier.height(16.dp))
-                Text(t.title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Column(
+                Modifier.padding(24.dp).verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(t.title, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(t.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 Spacer(Modifier.height(16.dp))
-                if (qr != null) {
-                    Box(Modifier.background(Color.White, RoundedCornerShape(16.dp)).padding(10.dp)) {
-                        Image(qr.asImageBitmap(), contentDescription = "QR code", modifier = Modifier.size(220.dp))
+                Box(
+                    Modifier.size(240.dp).clip(RoundedCornerShape(24.dp)).background(Color.White),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val bmp = qr
+                    if (bmp != null) Image(bmp.asImageBitmap(), contentDescription = "Audify QR code", modifier = Modifier.fillMaxSize())
+                    else CircularProgressIndicator(strokeWidth = 2.dp)
+                }
+                Spacer(Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    QR_THEMES.forEachIndexed { i, th ->
+                        Box(
+                            Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(Brush.linearGradient(listOf(Color(th.start), Color(th.end))))
+                                .then(if (i == themeIdx) Modifier.border(2.5.dp, Color.White, CircleShape) else Modifier)
+                                .clickable { themeIdx = i },
+                        )
                     }
                 }
+                Text(theme.name, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
                 if (t.code != null) {
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(12.dp))
                     Text("AUDIFY CODE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(t.code, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
@@ -235,22 +245,27 @@ fun ShareDialog(t: ShareTarget) {
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Friends open Audify → tap the code icon on Home → type the code or scan the QR.",
+                    "Friends open Audify, tap the code icon on Home, then type the code or scan the QR.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
                 Spacer(Modifier.height(20.dp))
                 Row {
-                    OutlinedButton(onClick = { copy(ctx, t.code ?: t.qrContent) }) { Text("Copy") }
+                    OutlinedButton(onClick = { copy(ctx, t.code ?: t.qrContent) }) { Text(if (t.code != null) "Copy code" else "Copy link") }
                     Spacer(Modifier.width(12.dp))
                     Button(onClick = {
-                        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, t.shareText)
-                        ctx.startActivity(Intent.createChooser(send, "Share").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        val bmp = qr
+                        if (bmp != null) {
+                            shareImage(ctx, bmp, t.shareText)
+                        } else {
+                            val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, t.shareText)
+                            ctx.startActivity(Intent.createChooser(send, "Share").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }
                     }) {
                         Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Share")
+                        Text("Share QR")
                     }
                 }
             }
@@ -302,6 +317,7 @@ fun SettingsDialog() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var quality by remember { mutableStateOf(Prefs.quality) }
+    var streamQ by remember { mutableStateOf(Prefs.streamQuality) }
     var keep by remember { mutableStateOf(Prefs.keepVideo) }
     var status by remember { mutableStateOf<String?>(null) }
     var updating by remember { mutableStateOf(false) }
@@ -312,7 +328,32 @@ fun SettingsDialog() {
             item {
                 Text("Settings", style = MaterialTheme.typography.headlineSmall)
                 Spacer(Modifier.height(16.dp))
-                Text("AUDIO QUALITY", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                Text("STREAMING QUALITY", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    "Lower quality means less data to fetch, so songs start with less lag.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
+            }
+            items(StreamQuality.entries.toList()) { q ->
+                Row(
+                    Modifier.fillMaxWidth()
+                        .selectable(selected = q == streamQ, onClick = { streamQ = q; Prefs.streamQuality = q; Streams.clear() })
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = q == streamQ, onClick = null)
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(q.label, style = MaterialTheme.typography.bodyLarge)
+                        Text(q.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            item {
+                HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                Text("DOWNLOAD QUALITY", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 Text(
                     "Used for downloads. YouTube's best source audio is ~160 kbps Opus, so \"lossless\" keeps that exactly rather than adding detail.",
                     style = MaterialTheme.typography.bodySmall,
@@ -369,7 +410,7 @@ fun SettingsDialog() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     LogoMark(18.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text("Audify 3.0", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Audify 4.0", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(Modifier.height(32.dp))
             }

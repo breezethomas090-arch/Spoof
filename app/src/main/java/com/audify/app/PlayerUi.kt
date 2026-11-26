@@ -1,6 +1,7 @@
 package com.audify.app
 
 import android.os.Build
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -62,9 +63,13 @@ fun MiniPlayer() {
     val liked by Store.liked.collectAsStateWithLifecycle()
     val isLiked = song != null && liked.any { it.id == song.id }
 
+    // Tinted with a colour from the cover art, like Spotify
+    val artTint by rememberArtColor(md.artworkUri ?: song?.thumb, MaterialTheme.colorScheme.surfaceContainerHigh)
+    val tint by animateColorAsState(artTint, label = "miniTint")
+
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(12.dp),
+        color = tint,
+        shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
         Column {
@@ -79,7 +84,7 @@ fun MiniPlayer() {
                     Text(
                         PlayerConn.error ?: (md.artist?.toString() ?: ""),
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (PlayerConn.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (PlayerConn.error != null) MaterialTheme.colorScheme.error else Color.White.copy(alpha = 0.7f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -89,7 +94,7 @@ fun MiniPlayer() {
                         Icon(
                             if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                             contentDescription = "Like",
-                            tint = if (isLiked) Pink else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (isLiked) Pink else Color.White,
                         )
                     }
                 }
@@ -98,7 +103,7 @@ fun MiniPlayer() {
                     else IconButton(onClick = { PlayerConn.toggle() }) { PlayPauseIcon() }
                 }
             }
-            Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp).height(2.dp).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
+            Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp).height(2.dp).background(Color.White.copy(alpha = 0.25f))) {
                 Box(
                     Modifier
                         .fillMaxWidth(if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f)
@@ -123,20 +128,22 @@ fun NowPlayingScreen() {
     val max = dur.toFloat().coerceAtLeast(1f)
     val shown = if (dragging) dragValue else pos.toFloat().coerceIn(0f, max)
     val art = md?.artworkUri
+    val artTint by rememberArtColor(art ?: song?.thumb)
+    val tint by animateColorAsState(artTint, label = "npTint")
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(tint, Color.Black)))) {
         // Soft blurred artwork glow behind everything (Android 12+)
         if (Build.VERSION.SDK_INT >= 31 && art != null) {
             AsyncImage(
                 model = art,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize().blur(90.dp).alpha(0.45f),
+                modifier = Modifier.fillMaxSize().blur(90.dp).alpha(0.3f),
             )
         }
         Box(
             Modifier.fillMaxSize().background(
-                Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.2f), Color.Black.copy(alpha = 0.85f), Color.Black))
+                Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f), Color.Black))
             )
         )
 

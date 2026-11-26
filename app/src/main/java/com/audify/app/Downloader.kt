@@ -76,6 +76,35 @@ object Downloader {
         return out.distinctBy { it.id }
     }
 
+    /** Public playlists on YouTube matching [query] (made by other people). */
+    fun publicPlaylists(ctx: Context, query: String, limit: Int = 12): List<RemotePlaylist> {
+        init(ctx)
+        val url = "https://www.youtube.com/results?search_query=" +
+            java.net.URLEncoder.encode(query, "UTF-8") + "&sp=EgIQAw%3D%3D"
+        val req = YoutubeDLRequest(url).apply {
+            addOption("--flat-playlist")
+            addOption("-J")
+            addOption("--no-warnings")
+            addOption("--playlist-end", limit.toString())
+        }
+        val entries = JSONObject(run(req, "pl")).optJSONArray("entries") ?: return emptyList()
+        val out = ArrayList<RemotePlaylist>()
+        for (i in 0 until entries.length()) {
+            val e = entries.optJSONObject(i) ?: continue
+            val id = e.str("id")
+            val title = e.str("title")
+            if (id.length < 13 || title.isEmpty() || id.startsWith("RD")) continue
+            val thumbs = e.optJSONArray("thumbnails")
+            val thumb = thumbs?.optJSONObject(thumbs.length() - 1)?.optString("url")?.takeIf { it.startsWith("http") }
+            val count = if (e.isNull("playlist_count")) 0 else e.optInt("playlist_count")
+            out += RemotePlaylist(id, title, e.str("channel").ifEmpty { e.str("uploader") }, thumb, count)
+        }
+        return out
+    }
+
+    fun playlistSongs(ctx: Context, playlistId: String, limit: Int = 100): List<Song> =
+        flatList(ctx, "https://www.youtube.com/playlist?list=$playlistId", limit)
+
     /** Look up titles for bare video ids (used when opening Audify codes). */
     fun resolveSongs(ctx: Context, ids: List<String>): List<Song> {
         init(ctx)
@@ -107,8 +136,12 @@ object Downloader {
     /** Direct audio URL (+ the User-Agent it must be fetched with) for streaming. */
     fun streamInfo(ctx: Context, id: String): Pair<String, String?> {
         init(ctx)
-        val format = if (Prefs.quality == Quality.SAVER) "worstaudio[ext=m4a]/worstaudio/bestaudio"
-        else "bestaudio[ext=m4a]/bestaudio"
+        // Streaming uses a lighter format than downloads so songs start quicker
+        val format = when (Prefs.streamQuality) {
+            StreamQuality.LOW -> "worstaudio[abr>=40]/worstaudio/bestaudio"
+            StreamQuality.NORMAL -> "bestaudio[abr<=100]/bestaudio[ext=m4a]/bestaudio"
+            StreamQuality.HIGH -> "bestaudio[ext=m4a]/bestaudio"
+        }
         val req = YoutubeDLRequest("https://www.youtube.com/watch?v=$id").apply {
             addOption("-f", format)
             addOption("--no-playlist")
