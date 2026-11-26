@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 
 package com.audify.app
 
@@ -8,6 +8,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -115,17 +117,31 @@ private fun CoverCard(title: String, subtitle: String, width: Dp = 150.dp, onCli
     }
 }
 
-private class QuickTileSpec(val title: String, val onClick: () -> Unit, val cover: @Composable () -> Unit)
+private class QuickTileSpec(
+    val title: String,
+    val onClick: () -> Unit,
+    val cover: @Composable () -> Unit,
+    val song: Song? = null,
+)
 
 /** Compact two-column shortcut tile, like Spotify's home grid. */
 @Composable
-private fun QuickTile(title: String, modifier: Modifier, onClick: () -> Unit, cover: @Composable () -> Unit) {
+private fun QuickTile(title: String, modifier: Modifier, onClick: () -> Unit, song: Song? = null, cover: @Composable () -> Unit) {
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     Row(
         modifier
             .height(56.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .clickable(onClick = onClick),
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = if (song == null) null else {
+                    {
+                        haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        Ui.addToPlaylist = listOf(song)
+                    }
+                },
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         cover()
@@ -231,6 +247,11 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
             }
         }
 
+        // Audify DJ
+        if (filter != 2) {
+            item { DjCard() }
+        }
+
         // Quick-access grid
         if (filter != 1) {
             item {
@@ -240,13 +261,13 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
                     tiles += QuickTileSpec(p.name, onClick = { Ui.detail = Detail.PlaylistView(p.id) }, cover = { PlaylistCover(p, 56.dp, RoundedCornerShape(0.dp)) })
                 }
                 history.take((8 - tiles.size).coerceAtLeast(0)).forEachIndexed { i, s ->
-                    tiles += QuickTileSpec(s.title, onClick = { PlayerConn.playSongs(history, i) }, cover = { SongArt(s, Modifier.size(56.dp), RoundedCornerShape(0.dp)) })
+                    tiles += QuickTileSpec(s.title, onClick = { PlayerConn.playSongs(history, i) }, cover = { SongArt(s, Modifier.size(56.dp), RoundedCornerShape(0.dp)) }, song = s)
                 }
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     tiles.chunked(2).forEach { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             row.forEach { t ->
-                                QuickTile(t.title, Modifier.weight(1f), onClick = t.onClick, cover = t.cover)
+                                QuickTile(t.title, Modifier.weight(1f), onClick = t.onClick, song = t.song, cover = t.cover)
                             }
                             if (row.size == 1) Spacer(Modifier.weight(1f))
                         }
@@ -1382,4 +1403,53 @@ fun YtMusicImportDialog() {
         },
         dismissButton = { TextButton(onClick = { Ui.showYtDialog = false }) { Text("Cancel") } },
     )
+}
+
+
+// ============================================================== DJ card
+
+/** Spotify-style DJ entry on Home. */
+@Composable
+fun DjCard() {
+    val ctx = LocalContext.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Brush.linearGradient(listOf(Color(0xFF3B1E7A), Color(0xFF7A1E5B))))
+            .clickable { if (Dj.active) Dj.switchItUp(ctx) else Dj.start(ctx) }
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(52.dp).clip(CircleShape).background(BrandBrush), contentAlignment = Alignment.Center) {
+            Text("DJ", color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Your DJ", style = MaterialTheme.typography.titleMedium, color = Color.White)
+            Text(
+                when {
+                    Dj.building -> "Putting your set together…"
+                    Dj.active -> "On air: ${Dj.sectionTitle ?: "your mix"} · tap to switch it up"
+                    else -> "A personal mix with a host who talks you through it"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.8f),
+                maxLines = 2,
+            )
+        }
+        if (Dj.building) {
+            CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
+        } else {
+            Box(Modifier.size(40.dp).clip(CircleShape).background(Color.White), contentAlignment = Alignment.Center) {
+                Icon(
+                    if (Dj.active) AppIcons.Shuffle else Icons.Rounded.PlayArrow,
+                    contentDescription = if (Dj.active) "Switch it up" else "Start DJ",
+                    tint = Color.Black,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+    }
 }

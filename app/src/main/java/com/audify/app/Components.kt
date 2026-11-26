@@ -1,7 +1,12 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.audify.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -114,10 +119,15 @@ fun SongRow(
     playlistId: String? = null,
 ) {
     val isCurrent = PlayerConn.currentSong?.id == song.id
+    val haptics = LocalHapticFeedback.current
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = {
+                // Press and hold a song to add it to a playlist
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                Ui.addToPlaylist = listOf(song)
+            })
             .padding(start = 20.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -154,7 +164,15 @@ fun SongRow(
 /** Square card for horizontal rows. */
 @Composable
 fun SongCard(song: Song, onClick: () -> Unit) {
-    Column(Modifier.width(132.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(4.dp)) {
+    val haptics = LocalHapticFeedback.current
+    Column(
+        Modifier.width(132.dp).clip(RoundedCornerShape(10.dp))
+            .combinedClickable(onClick = onClick, onLongClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                Ui.addToPlaylist = listOf(song)
+            })
+            .padding(4.dp),
+    ) {
         SongArt(song, Modifier.size(124.dp), RoundedCornerShape(10.dp))
         Spacer(Modifier.height(8.dp))
         Text(song.title, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)

@@ -138,7 +138,17 @@ fun AddToPlaylistSheet(songs: List<Song>) {
     val ctx = LocalContext.current
     val playlists by Store.playlists.collectAsStateWithLifecycle()
     ModalBottomSheet(onDismissRequest = { Ui.addToPlaylist = null }, containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-        Text("Add to playlist", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+        Text("Add to playlist", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp).padding(top = 8.dp))
+        if (songs.size == 1) {
+            Text(
+                songs.first().title,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = 8.dp),
+            )
+        }
         LazyColumn(Modifier.heightIn(max = 480.dp)) {
             item {
                 PlaylistPickRow(null, "New playlist", "") {
@@ -356,6 +366,8 @@ fun SettingsDialog() {
                     }
                 }
                 Spacer(Modifier.height(16.dp))
+                DjSettings()
+                Spacer(Modifier.height(16.dp))
                 Text("STREAMING QUALITY", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 Text(
                     "Lower quality means less data to fetch, so songs start with less lag.",
@@ -571,4 +583,39 @@ private fun EqCurve(modifier: Modifier) {
         }
         drawPath(path, lineColor, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 6f, cap = androidx.compose.ui.graphics.StrokeCap.Round))
     }
+}
+
+
+@Composable
+private fun DjSettings() {
+    var voice by remember { mutableStateOf(Prefs.djVoice) }
+    var key by remember { mutableStateOf(Prefs.claudeKey) }
+    var showKey by remember { mutableStateOf(false) }
+    Text("DJ", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+    Row(
+        Modifier.fillMaxWidth().clickable { voice = !voice; Prefs.djVoice = voice }.padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("DJ talks out loud", style = MaterialTheme.typography.bodyLarge)
+            Text("Uses your phone's voice. Off = the DJ's lines only show on screen", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = voice, onCheckedChange = { voice = it; Prefs.djVoice = it })
+    }
+    Text(
+        "Optional: paste an Anthropic API key and Claude will write what the DJ says. Without one, the DJ uses its own built-in lines. The key stays on this phone.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    OutlinedTextField(
+        value = key,
+        onValueChange = { key = it.trim(); Prefs.claudeKey = key },
+        singleLine = true,
+        label = { Text("Anthropic API key (optional)") },
+        placeholder = { Text("sk-ant-…") },
+        visualTransformation = if (showKey) androidx.compose.ui.text.input.VisualTransformation.None
+        else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+        trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "Hide" else "Show") } },
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+    )
 }

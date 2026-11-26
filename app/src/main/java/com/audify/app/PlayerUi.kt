@@ -8,6 +8,10 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.material.icons.rounded.Close
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -158,6 +162,73 @@ fun MiniPlayer() {
     }
 }
 
+/** Shuffle button with three states: off, shuffle, and Smart Shuffle (with a sparkle). */
+@Composable
+fun ShuffleButton(on: Color, off: Color, onClick: () -> Unit) {
+    val mode = PlayerConn.shuffleMode
+    IconButton(onClick = onClick) {
+        Box {
+            Icon(
+                AppIcons.Shuffle,
+                contentDescription = when (mode) {
+                    PlayerConn.ShuffleMode.OFF -> "Shuffle off"
+                    PlayerConn.ShuffleMode.NORMAL -> "Shuffle on"
+                    PlayerConn.ShuffleMode.SMART -> "Smart Shuffle on"
+                },
+                tint = if (mode == PlayerConn.ShuffleMode.OFF) off else on,
+            )
+            if (mode == PlayerConn.ShuffleMode.SMART) {
+                Text(
+                    "✦",
+                    color = Pink,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.align(Alignment.TopEnd).offset(x = 7.dp, y = (-7).dp),
+                )
+            }
+        }
+    }
+}
+
+/** What the DJ is saying, with "Switch it up" and stop. */
+@Composable
+fun DjPanel() {
+    val ctx = LocalContext.current
+    Surface(
+        color = Color.White.copy(alpha = 0.08f),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+    ) {
+        Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(34.dp).clip(CircleShape).background(BrandBrush),
+                contentAlignment = Alignment.Center,
+            ) { Text("DJ", color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold) }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    Dj.sectionTitle ?: "Audify DJ",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    (if (Dj.speaking) "🔊 " else "") + (Dj.line ?: ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (Dj.building) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            } else {
+                TextButton(onClick = { Dj.switchItUp(ctx) }) { Text("Switch it up") }
+            }
+            IconButton(onClick = { Dj.stop() }) {
+                Icon(Icons.Rounded.Close, contentDescription = "Stop DJ", modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+}
+
 @Composable
 fun NowPlayingScreen() {
     val md = PlayerConn.current?.mediaMetadata
@@ -250,6 +321,15 @@ fun NowPlayingScreen() {
                     }
                 }
             }
+            if (PlayerConn.current?.mediaId in PlayerConn.smartAdded) {
+                Text(
+                    "✦ Smart Shuffle pick",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+            }
+            if (Dj.active || Dj.building) DjPanel()
             PlayerConn.error?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
             }
@@ -286,8 +366,17 @@ fun NowPlayingScreen() {
             ) {
                 val on = MaterialTheme.colorScheme.primary
                 val off = MaterialTheme.colorScheme.onSurfaceVariant
-                IconButton(onClick = { PlayerConn.toggleShuffle() }) {
-                    Icon(AppIcons.Shuffle, contentDescription = "Shuffle", tint = if (PlayerConn.shuffle) on else off)
+                val ctx = LocalContext.current
+                ShuffleButton(on, off) {
+                    val mode = PlayerConn.cycleShuffle()
+                    Ui.toast(
+                        ctx,
+                        when (mode) {
+                            PlayerConn.ShuffleMode.OFF -> "Shuffle off"
+                            PlayerConn.ShuffleMode.NORMAL -> "Shuffle on"
+                            PlayerConn.ShuffleMode.SMART -> "Smart Shuffle on: adding songs you might like"
+                        },
+                    )
                 }
                 IconButton(onClick = { PlayerConn.previous() }, modifier = Modifier.size(56.dp)) {
                     Icon(AppIcons.SkipPrevious, contentDescription = "Previous", modifier = Modifier.size(34.dp))

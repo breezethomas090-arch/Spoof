@@ -44,7 +44,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (!isChangingConfigurations) PlayerConn.disconnect()
+        // Keep the connection while the DJ is running so it can keep talking in the background
+        if (!isChangingConfigurations && !Dj.active) PlayerConn.disconnect()
         super.onDestroy()
     }
 

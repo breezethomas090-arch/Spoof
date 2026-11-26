@@ -333,6 +333,15 @@ object Prefs {
         sp = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
     }
 
+    var djVoice: Boolean
+        get() = sp.getBoolean("djVoice", true)
+        set(v) = sp.edit().putBoolean("djVoice", v).apply()
+
+    /** Optional Anthropic API key so Claude writes what the DJ says. Stored only on this phone. */
+    var claudeKey: String
+        get() = sp.getString("claudeKey", "") ?: ""
+        set(v) = sp.edit().putString("claudeKey", v.trim()).apply()
+
     var quickFirst: Boolean
         get() = sp.getBoolean("quickFirst", true)
         set(v) = sp.edit().putBoolean("quickFirst", v).apply()

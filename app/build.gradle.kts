@@ -19,7 +19,7 @@ android {
         // Version code from the build time (in minutes), so every new APK installs as an update
         val stamp = SimpleDateFormat("yyyyMMdd-HHmm").apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date())
         versionCode = (System.currentTimeMillis() / 60_000L - 29_000_000L).toInt()
-        versionName = "5.4 ($stamp)"
+        versionName = "5.5 ($stamp)"
     }
 
     // yt-dlp + Python + ffmpeg are native per-CPU, so build one APK per ABI to keep size down.

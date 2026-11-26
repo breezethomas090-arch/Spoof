@@ -403,6 +403,21 @@ object PlayerConn {
         private set
     var shuffle by mutableStateOf(false)
         private set
+
+    /** Spotify-style shuffle: off, normal shuffle, or Smart Shuffle (mixes in recommendations). */
+    enum class ShuffleMode { OFF, NORMAL, SMART }
+
+    var shuffleMode by mutableStateOf(ShuffleMode.OFF)
+        private set
+
+    /** Media ids that Smart Shuffle added, so they can be marked and removed again. */
+    var smartAdded by mutableStateOf<Set<String>>(emptySet())
+        private set
+    var smartLoading by mutableStateOf(false)
+        private set
+    private var appCtx: Context? = null
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
     var repeatMode by mutableIntStateOf(Player.REPEAT_MODE_OFF)
         private set
     var error by mutableStateOf<String?>(null)
@@ -417,6 +432,7 @@ object PlayerConn {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             error = null
             songOf(mediaItem)?.let { Store.addHistory(it) }
+            Dj.onTransition(mediaItem)
         }
 
         override fun onPlayerError(e: PlaybackException) {
@@ -425,6 +441,7 @@ object PlayerConn {
     }
 
     fun connect(ctx: Context) {
+        appCtx = ctx.applicationContext
         if (future != null) return
         val token = SessionToken(ctx, ComponentName(ctx, PlaybackService::class.java))
         val f = MediaController.Builder(ctx, token).buildAsync()
@@ -451,6 +468,13 @@ object PlayerConn {
         current = p.currentMediaItem
         duration = p.duration.takeIf { it > 0 } ?: 0L
         shuffle = p.shuffleModeEnabled
+        // Shuffle toggled from the notification / headset: keep our mode in step
+        if (!p.shuffleModeEnabled && shuffleMode != ShuffleMode.OFF) {
+            shuffleMode = ShuffleMode.OFF
+            smartAdded = emptySet()
+        } else if (p.shuffleModeEnabled && shuffleMode == ShuffleMode.OFF) {
+            shuffleMode = ShuffleMode.NORMAL
+        }
         repeatMode = p.repeatMode
     }
 
@@ -467,10 +491,10 @@ object PlayerConn {
 
     val currentSong: Song? get() = songOf(current)
 
-    private fun itemFor(s: Song): MediaItem = Library.byId(s.id)?.toMediaItem() ?: s.toStreamItem()
+    fun itemFor(s: Song): MediaItem = Library.byId(s.id)?.toMediaItem() ?: s.toStreamItem()
 
     /** Plays songs, using the downloaded copy when there is one and streaming otherwise. */
-    fun playSongs(all: List<Song>, startAt: Int, shuffled: Boolean = false) {
+    fun playSongs(all: List<Song>, startAt: Int, shuffled: Boolean = false, inOrder: Boolean = false) {
         val c = controller ?: return
         if (all.isEmpty()) return
         // Songs from other platforms are looked up before playing, so keep their queue short
@@ -482,17 +506,28 @@ object PlayerConn {
             start = 0
         }
         error = null
-        c.shuffleModeEnabled = shuffled
+        smartAdded = emptySet()
+        // Like Spotify, your shuffle setting carries over to whatever you play next
+        when {
+            inOrder -> shuffleMode = ShuffleMode.OFF
+            shuffled && shuffleMode == ShuffleMode.OFF -> shuffleMode = ShuffleMode.NORMAL
+        }
+        if (!inOrder && Dj.active) Dj.stop()
+        c.shuffleModeEnabled = shuffleMode != ShuffleMode.OFF
         c.setMediaItems(songs.map(::itemFor), start.coerceIn(0, songs.size - 1), 0L)
         c.prepare()
         c.play()
+        if (shuffleMode == ShuffleMode.SMART) addSmartPicks()
     }
 
     fun playTracks(tracks: List<Track>, start: Int, shuffled: Boolean = false) {
         val c = controller ?: return
         if (tracks.isEmpty()) return
         error = null
-        c.shuffleModeEnabled = shuffled
+        smartAdded = emptySet()
+        if (Dj.active) Dj.stop()
+        if (shuffled && shuffleMode == ShuffleMode.OFF) shuffleMode = ShuffleMode.NORMAL
+        c.shuffleModeEnabled = shuffleMode != ShuffleMode.OFF
         c.setMediaItems(tracks.map { it.toMediaItem() }, start.coerceIn(0, tracks.size - 1), 0L)
         c.prepare()
         c.play()
@@ -530,8 +565,95 @@ object PlayerConn {
         controller?.seekTo(ms)
     }
 
-    fun toggleShuffle() {
-        controller?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled }
+    /** Tap the shuffle button: Off → Shuffle → Smart Shuffle → Off. */
+    fun cycleShuffle(): ShuffleMode {
+        val next = when (shuffleMode) {
+            ShuffleMode.OFF -> ShuffleMode.NORMAL
+            ShuffleMode.NORMAL -> ShuffleMode.SMART
+            ShuffleMode.SMART -> ShuffleMode.OFF
+        }
+        setShuffle(next)
+        return next
+    }
+
+    fun setShuffle(mode: ShuffleMode) {
+        val c = controller ?: return
+        shuffleMode = mode
+        when (mode) {
+            ShuffleMode.OFF -> {
+                removeSmartPicks()
+                c.shuffleModeEnabled = false
+            }
+            ShuffleMode.NORMAL -> {
+                removeSmartPicks()
+                c.shuffleModeEnabled = true
+            }
+            ShuffleMode.SMART -> {
+                c.shuffleModeEnabled = true
+                addSmartPicks()
+            }
+        }
+    }
+
+    /**
+     * Smart Shuffle: finds songs related to what's in your queue and shuffles them in,
+     * roughly one recommendation for every three of your songs.
+     */
+    private fun addSmartPicks() {
+        val c = controller ?: return
+        val ctx = appCtx ?: return
+        val queue = (0 until c.mediaItemCount).mapNotNull { songOf(c.getMediaItemAt(it)) }
+        val inQueue = queue.map { it.id }.toSet()
+        val seeds = queue.filter { it.isYouTube }.shuffled().take(3)
+            .ifEmpty { listOfNotNull(Store.history.value.firstOrNull { it.isYouTube }) }
+        if (seeds.isEmpty()) return
+        val wanted = (queue.size / 3).coerceIn(3, 15)
+        smartLoading = true
+        kotlin.concurrent.thread(name = "smart-shuffle") {
+            val picks = seeds.flatMap { seed -> runCatching { Downloader.related(ctx, seed.id, 15) }.getOrDefault(emptyList()) }
+                .distinctBy { it.id }
+                .filter { it.id !in inQueue }
+                .shuffled()
+                .take(wanted)
+            main.post {
+                smartLoading = false
+                val ctl = controller ?: return@post
+                if (shuffleMode != ShuffleMode.SMART || picks.isEmpty()) return@post
+                val items = picks.map(::itemFor)
+                ctl.addMediaItems(items)   // shuffle mode places them at random spots
+                smartAdded = smartAdded + items.map { it.mediaId }
+            }
+        }
+    }
+
+    private fun removeSmartPicks() {
+        val c = controller ?: return
+        if (smartAdded.isEmpty()) return
+        val current = c.currentMediaItemIndex
+        for (i in c.mediaItemCount - 1 downTo 0) {
+            if (i != current && c.getMediaItemAt(i).mediaId in smartAdded) c.removeMediaItem(i)
+        }
+        smartAdded = emptySet()
+    }
+
+    /** Jump to a queue position (used by the DJ's "Switch it up"). */
+    fun seekToIndex(index: Int) {
+        val c = controller ?: return
+        if (index in 0 until c.mediaItemCount) c.seekTo(index, 0L)
+    }
+
+    fun queueIndexOf(mediaId: String): Int {
+        val c = controller ?: return -1
+        return (0 until c.mediaItemCount).firstOrNull { c.getMediaItemAt(it).mediaId == mediaId } ?: -1
+    }
+
+    fun appendSongs(songs: List<Song>) {
+        controller?.addMediaItems(songs.map(::itemFor))
+    }
+
+    /** Lower the music while the DJ talks. */
+    fun duck(on: Boolean) {
+        controller?.volume = if (on) 0.22f else 1f
     }
 
     fun cycleRepeat() {
