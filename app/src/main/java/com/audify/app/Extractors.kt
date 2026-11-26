@@ -117,6 +117,10 @@ object ChunkedDownloader {
     private const val PARALLEL = 4
 
     fun download(src: AudioSource, dest: File, onProgress: (Float) -> Unit) {
+        if (!supportsRanges(src)) {
+            plainDownload(src, dest, onProgress)
+            return
+        }
         val total = contentLength(src)
         RandomAccessFile(dest, "rw").use { it.setLength(total) }
         val done = AtomicLong(0)
@@ -140,6 +144,44 @@ object ChunkedDownloader {
             throw (e.cause as? IOException) ?: IOException(e.cause?.message ?: "Download failed", e.cause)
         } finally {
             pool.shutdownNow()
+        }
+    }
+
+    private fun supportsRanges(src: AudioSource): Boolean {
+        val c = open(src, 0, 0)
+        return try {
+            c.responseCode == 206
+        } catch (_: Exception) {
+            false
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    /** One plain request, for servers that don't support ranges. */
+    private fun plainDownload(src: AudioSource, dest: File, onProgress: (Float) -> Unit) {
+        val c = URL(src.url).openConnection() as HttpURLConnection
+        try {
+            c.connectTimeout = 15_000
+            c.readTimeout = 30_000
+            src.userAgent?.let { c.setRequestProperty("User-Agent", it) }
+            if (c.responseCode != 200) throw IOException("Download failed (HTTP ${c.responseCode})")
+            val total = c.contentLengthLong
+            var done = 0L
+            c.inputStream.use { input ->
+                dest.outputStream().use { out ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        done += n
+                        if (total > 0) onProgress(done * 100f / total)
+                    }
+                }
+            }
+        } finally {
+            c.disconnect()
         }
     }
 

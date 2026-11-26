@@ -19,7 +19,7 @@ android {
         // Version code from the build time (in minutes), so every new APK installs as an update
         val stamp = SimpleDateFormat("yyyyMMdd-HHmm").apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date())
         versionCode = (System.currentTimeMillis() / 60_000L - 29_000_000L).toInt()
-        versionName = "5.3 ($stamp)"
+        versionName = "5.4 ($stamp)"
     }
 
     // yt-dlp + Python + ffmpeg are native per-CPU, so build one APK per ABI to keep size down.
@@ -99,6 +99,7 @@ dependencies {
 
     implementation("androidx.media3:media3-exoplayer:1.5.0")
     implementation("androidx.media3:media3-session:1.5.0")
+    implementation("androidx.media3:media3-exoplayer-hls:1.5.0")
     implementation("androidx.media3:media3-datasource:1.5.0")
     implementation("androidx.media3:media3-database:1.5.0")
     implementation("com.google.guava:guava:33.3.1-android")

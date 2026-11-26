@@ -253,6 +253,8 @@ class PlaybackService : MediaSessionService() {
 
     private var session: MediaSession? = null
     private var retried = false
+    private val extResolver = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val extResolverPool = java.util.concurrent.Executors.newFixedThreadPool(4)
 
     override fun onCreate() {
         super.onCreate()
@@ -328,8 +330,27 @@ class PlaybackService : MediaSessionService() {
                     mediaSession: MediaSession,
                     controller: MediaSession.ControllerInfo,
                     mediaItems: MutableList<MediaItem>,
-                ): ListenableFuture<MutableList<MediaItem>> =
-                    Futures.immediateFuture(mediaItems.map { it.withUri() }.toMutableList())
+                ): ListenableFuture<MutableList<MediaItem>> {
+                    if (mediaItems.none { it.mediaId.startsWith("ext:") }) {
+                        return Futures.immediateFuture(mediaItems.map { it.withUri() }.toMutableList())
+                    }
+                    // SoundCloud / Bandcamp / Audius: look up their streams (in parallel) first
+                    val future = com.google.common.util.concurrent.SettableFuture.create<MutableList<MediaItem>>()
+                    extResolver.execute {
+                        val app = applicationContext
+                        val resolved = mediaItems.map { item ->
+                            extResolverPool.submit<MediaItem> {
+                                if (!item.mediaId.startsWith("ext:")) return@submit item.withUri()
+                                val song = ExtSongs.get(item.mediaId.removePrefix("ext:"))
+                                val st = song?.let { runCatching { OtherSources.stream(app, it) }.getOrNull() }
+                                if (st == null) item.buildUpon().setUri("ext:unavailable").build()
+                                else item.buildUpon().setUri(st.url).setMimeType(st.mimeType).build()
+                            }
+                        }.map { it.get() }
+                        future.set(resolved.toMutableList())
+                    }
+                    return future
+                }
             })
             .build()
     }
@@ -439,9 +460,9 @@ object PlayerConn {
     fun songOf(item: MediaItem?): Song? {
         item ?: return null
         val md = item.mediaMetadata
-        val id = if (item.mediaId.startsWith("yt:")) item.mediaId.removePrefix("yt:")
-        else Library.byPath(item.mediaId)?.videoId ?: return null
-        return Song(id, md.title?.toString() ?: "", md.artist?.toString() ?: "")
+        if (item.mediaId.startsWith("ext:")) return ExtSongs.get(item.mediaId.removePrefix("ext:"))
+        if (item.mediaId.startsWith("yt:")) return Song(item.mediaId.removePrefix("yt:"), md.title?.toString() ?: "", md.artist?.toString() ?: "")
+        return Library.byPath(item.mediaId)?.toSong()
     }
 
     val currentSong: Song? get() = songOf(current)
@@ -449,9 +470,17 @@ object PlayerConn {
     private fun itemFor(s: Song): MediaItem = Library.byId(s.id)?.toMediaItem() ?: s.toStreamItem()
 
     /** Plays songs, using the downloaded copy when there is one and streaming otherwise. */
-    fun playSongs(songs: List<Song>, start: Int, shuffled: Boolean = false) {
+    fun playSongs(all: List<Song>, startAt: Int, shuffled: Boolean = false) {
         val c = controller ?: return
-        if (songs.isEmpty()) return
+        if (all.isEmpty()) return
+        // Songs from other platforms are looked up before playing, so keep their queue short
+        var songs = all
+        var start = startAt
+        if (all.any { !it.isYouTube && Library.byId(it.id) == null }) {
+            val from = startAt.coerceIn(0, all.size - 1)
+            songs = all.subList(from, minOf(from + 8, all.size))
+            start = 0
+        }
         error = null
         c.shuffleModeEnabled = shuffled
         c.setMediaItems(songs.map(::itemFor), start.coerceIn(0, songs.size - 1), 0L)

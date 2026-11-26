@@ -164,9 +164,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private var publicLoaded = false
     private var viralLoaded = false
 
-    private fun pickSeed(): Song? = Store.history.value.firstOrNull()
-        ?: Store.liked.value.firstOrNull()
-        ?: Library.tracks.value.firstNotNullOfOrNull { it.toSong() }
+    private fun pickSeed(): Song? = Store.history.value.firstOrNull { it.isYouTube }
+        ?: Store.liked.value.firstOrNull { it.isYouTube }
+        ?: Library.tracks.value.firstNotNullOfOrNull { it.toSong()?.takeIf { s -> s.isYouTube } }
 
     fun load(force: Boolean = false) {
         val s = pickSeed()
@@ -356,29 +356,45 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
 fun isUrl(s: String) = s.startsWith("http://") || s.startsWith("https://") ||
     s.contains("youtu.be/") || s.contains("youtube.com/") || s.startsWith("audify://")
 
+val SEARCH_SOURCES = listOf("yt", "sc", "au", "bc")
+
 class SearchViewModel(app: Application) : AndroidViewModel(app) {
     var query by mutableStateOf("")
-    var results by mutableStateOf<List<Song>>(emptyList())
+    /** Results per platform: "yt" YouTube, "sc" SoundCloud, "au" Audius, "bc" Bandcamp. */
+    var bySource by mutableStateOf<Map<String, List<Song>>>(emptyMap())
         private set
-    var loading by mutableStateOf(false)
+    var pending by mutableStateOf<Set<String>>(emptySet())
         private set
+    var filter by mutableStateOf("all")
     var error by mutableStateOf<String?>(null)
         private set
     private var seq = 0
 
+    val results: List<Song> get() = bySource["yt"].orEmpty()
+    val loading: Boolean get() = pending.isNotEmpty() && bySource.values.all { it.isEmpty() }
+
     fun search(q: String = query.trim()) {
         if (q.isEmpty() || isUrl(q)) return
         val mine = ++seq
-        loading = true
+        bySource = emptyMap()
+        pending = SEARCH_SOURCES.toSet()
         error = null
-        viewModelScope.launch {
-            val r = runCatching { withContext(Dispatchers.IO) { Downloader.search(getApplication(), q) } }
-            if (mine != seq) return@launch
-            loading = false
-            r.onSuccess {
-                results = it
-                if (it.isEmpty()) error = "No results for \"$q\""
-            }.onFailure { error = shortError(it) }
+        filter = "all"
+        // Every platform at once; each section appears as soon as it's ready
+        for (src in SEARCH_SOURCES) {
+            viewModelScope.launch {
+                val r = runCatching {
+                    withContext(Dispatchers.IO) {
+                        if (src == "yt") Downloader.search(getApplication(), q) else OtherSources.search(src, q)
+                    }
+                }
+                if (mine != seq) return@launch
+                bySource = bySource + (src to r.getOrDefault(emptyList()))
+                pending = pending - src
+                if (pending.isEmpty() && bySource.values.all { it.isEmpty() }) {
+                    error = r.exceptionOrNull()?.let { shortError(it) } ?: "No results for \"$q\""
+                }
+            }
         }
     }
 
@@ -386,14 +402,16 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
     fun genre(name: String) {
         query = name
         val mine = ++seq
-        loading = true
+        bySource = emptyMap()
+        pending = setOf("yt")
         error = null
+        filter = "all"
         viewModelScope.launch {
             val r = runCatching { withContext(Dispatchers.IO) { Downloader.genre(getApplication(), name) } }
             if (mine != seq) return@launch
-            loading = false
+            pending = emptySet()
             r.onSuccess {
-                results = it
+                bySource = mapOf("yt" to it)
                 if (it.isEmpty()) error = "Couldn't load $name right now"
             }.onFailure { error = shortError(it) }
         }
@@ -401,10 +419,10 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clear() {
         query = ""
-        results = emptyList()
+        bySource = emptyMap()
         error = null
         seq++
-        loading = false
+        pending = emptySet()
     }
 }
 
@@ -485,7 +503,7 @@ fun SearchScreen(vm: SearchViewModel = viewModel()) {
             vm.error != null -> item {
                 Text(vm.error ?: "", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(32.dp))
             }
-            vm.results.isEmpty() -> {
+            vm.bySource.isEmpty() -> {
                 item {
                     Text("Browse all", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 12.dp))
                 }
@@ -508,9 +526,24 @@ fun SearchScreen(vm: SearchViewModel = viewModel()) {
                 }
             }
             else -> {
-                // If the results are mostly by one artist that matches the search, offer their page
+                // Platform filter chips
+                item {
+                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item { Pill("All", vm.filter == "all") { vm.filter = "all" } }
+                        items(SEARCH_SOURCES) { src ->
+                            val n = vm.bySource[src]?.size
+                            val label = Sources.label(src) + when {
+                                src in vm.pending -> " …"
+                                n != null -> " ($n)"
+                                else -> ""
+                            }
+                            Pill(label, vm.filter == src) { vm.filter = src }
+                        }
+                    }
+                }
+                // If the YouTube results are mostly by one artist that matches the search, offer their page
                 val top = vm.results.groupingBy { primaryArtist(it.artist) }.eachCount().maxByOrNull { it.value }?.key
-                if (top != null && top.isNotBlank() && (q.contains(top, true) || top.contains(q, true))) {
+                if (vm.filter in listOf("all", "yt") && top != null && top.isNotBlank() && (q.contains(top, true) || top.contains(q, true))) {
                     item {
                         Row(
                             Modifier.fillMaxWidth().clickable { Ui.openArtist(top) }.padding(horizontal = 16.dp, vertical = 10.dp),
@@ -528,8 +561,37 @@ fun SearchScreen(vm: SearchViewModel = viewModel()) {
                         }
                     }
                 }
-                itemsIndexed(vm.results, key = { _, s -> s.id }) { i, s ->
-                    SongRow(s, onClick = { PlayerConn.playSongs(vm.results, i) })
+                if (vm.filter == "all") {
+                    // A short section per platform
+                    for (src in SEARCH_SOURCES) {
+                        val list = vm.bySource[src].orEmpty()
+                        if (list.isEmpty() && src !in vm.pending) continue
+                        item(key = "h:$src") {
+                            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("On ${Sources.label(src)}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                if (src in vm.pending) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                else if (list.size > 5) TextButton(onClick = { vm.filter = src }) { Text("See all") }
+                            }
+                        }
+                        val shown = list.take(if (src == "yt") 6 else 4)
+                        itemsIndexed(shown, key = { _, s -> "$src:" + s.id }) { i, s ->
+                            SongRow(s, onClick = { PlayerConn.playSongs(list, i) })
+                        }
+                    }
+                } else {
+                    val list = vm.bySource[vm.filter].orEmpty()
+                    if (list.isEmpty()) {
+                        item {
+                            Text(
+                                if (vm.filter in vm.pending) "Searching ${Sources.label(vm.filter)}…" else "No results on ${Sources.label(vm.filter)}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(24.dp),
+                            )
+                        }
+                    }
+                    itemsIndexed(list, key = { _, s -> "f:" + s.id }) { i, s ->
+                        SongRow(s, onClick = { PlayerConn.playSongs(list, i) })
+                    }
                 }
             }
         }
@@ -640,7 +702,7 @@ fun JobRow(job: DlJob) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (failed != null) TextButton(onClick = { Downloads.enqueue(ctx, job.url, job.title, job.key) }) { Text("Retry") }
+            if (failed != null) TextButton(onClick = { Downloads.enqueue(ctx, job.url, job.title, job.key, job.song?.artist ?: "", job.song) }) { Text("Retry") }
             IconButton(onClick = { if (failed != null) Downloads.dismiss(job.key) else Downloads.cancel(job.key) }) {
                 Icon(Icons.Rounded.Close, contentDescription = "Cancel", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }

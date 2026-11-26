@@ -251,6 +251,18 @@ object Downloader {
         }
     }
 
+    /** Direct audio URL for any page yt-dlp supports (SoundCloud, Bandcamp…). */
+    fun directUrl(ctx: Context, page: String): String {
+        init(ctx)
+        val req = YoutubeDLRequest(page).apply {
+            addOption("-f", "bestaudio/best")
+            addOption("--no-playlist")
+            addOption("--no-warnings")
+            addOption("--print", "%(url)s")
+        }
+        return run(req, "direct").lines().lastOrNull { it.startsWith("http") } ?: throw IOException("No audio found")
+    }
+
     /** yt-dlp fallback for Audify's own downloader. */
     fun audioSource(ctx: Context, id: String, low: Boolean): AudioSource {
         init(ctx)

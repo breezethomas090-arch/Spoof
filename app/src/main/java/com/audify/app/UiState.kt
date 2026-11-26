@@ -77,6 +77,17 @@ object Ui {
     }
 
     fun shareSong(s: Song) {
+        if (!s.isYouTube) {
+            // Songs from other platforms are shared by their page link
+            share = ShareTarget(
+                title = s.title,
+                subtitle = "${s.artist} · ${s.sourceLabel}",
+                qrContent = s.url,
+                code = null,
+                shareText = "🎵 ${Profile.name} shared ${s.title} — ${s.artist} (${s.sourceLabel})\n${s.url}",
+            )
+            return
+        }
         share = ShareTarget(
             title = s.title,
             subtitle = s.artist,
@@ -126,6 +137,21 @@ object Ui {
                             toast(app, "Couldn't find that song")
                         } else {
                             PlayerConn.playSongs(songs, 0)
+                            showPlayer = true
+                        }
+                    }
+                }
+            }
+            is AudifyCodes.Parsed.Page -> {
+                busy = "Opening…"
+                thread {
+                    val song = runCatching { OtherSources.songFromPage(parsed.url) }.getOrNull()
+                    main.post {
+                        busy = null
+                        if (song == null) {
+                            toast(app, "Couldn't open that link")
+                        } else {
+                            PlayerConn.playSongs(listOf(song), 0)
                             showPlayer = true
                         }
                     }

@@ -22,10 +22,13 @@ data class Track(
     val videoId: String?,
     val cover: File?,
     val quality: String? = null,   // "low" = quick copy waiting for its upgrade
+    val source: String = "yt",
+    val page: String? = null,
+    val art: String? = null,
 ) {
     val path: String get() = file.absolutePath
 
-    fun toSong(): Song? = videoId?.let { Song(it, title, artist) }
+    fun toSong(): Song? = videoId?.let { Song(it, title, artist, 0, source, page, art) }
 
     fun toMediaItem(): MediaItem = MediaItem.Builder()
         .setMediaId(path)
@@ -34,7 +37,7 @@ data class Track(
             MediaMetadata.Builder()
                 .setTitle(title)
                 .setArtist(artist.ifEmpty { null })
-                .setArtworkUri(cover?.let { Uri.fromFile(it) } ?: videoId?.let { Uri.parse(Song(it, "", "").thumbLarge) })
+                .setArtworkUri(cover?.let { Uri.fromFile(it) } ?: toSong()?.thumbLarge?.takeIf { it.isNotEmpty() }?.let { Uri.parse(it) })
                 .build()
         )
         .build()
@@ -74,7 +77,10 @@ object Library {
 
     private fun load(f: File, coversDir: File): Track {
         val stem = f.nameWithoutExtension
-        val id = ID_RE.find(stem)?.groupValues?.get(1)
+        var id = ID_RE.find(stem)?.groupValues?.get(1)
+        var source = "yt"
+        var page: String? = null
+        var art: String? = null
         var title = stem.replace(ID_RE, "").replace('_', ' ').trim()
         var artist = ""
         val r = MediaMetadataRetriever()
@@ -94,10 +100,14 @@ object Library {
                 o.optString("t").takeIf { it.isNotBlank() }?.let { title = it }
                 o.optString("a").takeIf { it.isNotBlank() }?.let { artist = it }
                 quality = o.optString("q").ifBlank { null }
+                o.optString("k").takeIf { it.isNotBlank() }?.let { id = it }
+                o.optString("s").takeIf { it.isNotBlank() }?.let { source = it }
+                page = o.optString("p").ifBlank { null }
+                art = o.optString("r").ifBlank { null }
             }
         }
         val cover = File(coversDir, "$stem.jpg").takeIf { it.exists() }
-        return Track(f, title, artist, id, cover, quality)
+        return Track(f, title, artist, id, cover, quality, source, page, art)
     }
 }
 
@@ -108,7 +118,7 @@ sealed interface DlState {
     data class Failed(val message: String) : DlState
 }
 
-data class DlJob(val key: String, val url: String, val title: String, val state: DlState)
+data class DlJob(val key: String, val url: String, val title: String, val state: DlState, val song: Song? = null)
 
 object Downloads {
     private val _jobs = MutableStateFlow<Map<String, DlJob>>(emptyMap())
@@ -122,7 +132,7 @@ object Downloads {
     private val upgrader = Executors.newSingleThreadExecutor()     // background quality upgrades
     private val cancelled = ConcurrentHashMap.newKeySet<String>()
 
-    fun enqueue(ctx: Context, song: Song) = enqueue(ctx, song.url, song.title, song.id, song.artist)
+    fun enqueue(ctx: Context, song: Song) = enqueue(ctx, song.url, song.title, song.id, song.artist, song)
 
     fun enqueue(
         ctx: Context,
@@ -130,19 +140,27 @@ object Downloads {
         title: String,
         key: String = Downloader.videoIdFromUrl(url) ?: url,
         artist: String = "",
+        song: Song? = null,
     ) {
         if (Library.byId(key) != null) return
         val existing = _jobs.value[key]
         if (existing != null && existing.state !is DlState.Failed) return
         cancelled.remove(key)
-        _jobs.update { it + (key to DlJob(key, url, title, DlState.Queued)) }
+        _jobs.update { it + (key to DlJob(key, url, title, DlState.Queued, song)) }
         val app = ctx.applicationContext
         executor.execute {
             if (cancelled.remove(key)) return@execute
             setState(key, DlState.Running(-1f, "Starting…"))
-            val id = Downloader.videoIdFromUrl(url)
+            val id = if (song != null && !song.isYouTube) null else Downloader.videoIdFromUrl(url)
             val target = Prefs.quality
             try {
+                // SoundCloud / Bandcamp / Audius
+                if (song != null && !song.isYouTube) {
+                    otherDownload(app, song) { pct, line -> setState(key, DlState.Running(pct, line)) }
+                    Library.refresh(app)
+                    remove(key)
+                    return@execute
+                }
                 // 1) Quick low-quality copy so the song is offline in seconds, upgraded later
                 if (id != null && Prefs.quickFirst && target != Quality.SAVER) {
                     val quick = runCatching {
@@ -197,6 +215,27 @@ object Downloads {
                 return f
             }.onFailure { errors += it }
         }
+        throw errors.lastOrNull() ?: IOException("Download failed")
+    }
+
+    /** Direct download when the platform gives a plain file; yt-dlp (with ffmpeg) for HLS streams. */
+    private fun otherDownload(app: Context, s: Song, progress: (Float, String) -> Unit): File {
+        val errors = ArrayList<Throwable>()
+        runCatching {
+            val st = OtherSources.stream(app, s)
+            if (st.mimeType == null) {
+                return DirectDownload.saveFrom(app, s, AudioSource(st.url, null, st.ext, 0, s.sourceLabel)) { p ->
+                    progress(p, "Downloading ${p.toInt()}%")
+                }
+            }
+        }.onFailure { errors += it }
+        val page = s.page ?: throw errors.lastOrNull() ?: IOException("No link for this song")
+        progress(-1f, "Downloading…")
+        runCatching {
+            val f = Downloader.fetch(app, page, Prefs.quality, false, "dl-${s.id}", fast = false, onProgress = progress)
+            DirectDownload.writeMeta(app, f, s.title, s.artist, "high", s)
+            return f
+        }.onFailure { errors += it }
         throw errors.lastOrNull() ?: IOException("Download failed")
     }
 
@@ -266,9 +305,43 @@ object DirectDownload {
         return dest
     }
 
-    fun writeMeta(ctx: Context, audio: File, title: String, artist: String, quality: String) {
+    /** Saves a non-YouTube song from a direct file URL. */
+    fun saveFrom(ctx: Context, s: Song, src: AudioSource, onProgress: (Float) -> Unit): File {
+        val dir = Downloader.audioDir(ctx)
+        val partial = File(dir, ".partial").apply { mkdirs() }
+        val key = s.id.replace(':', '-')
+        val stem = s.title.replace(BAD_CHARS, "_").trim().take(110).ifEmpty { key } + " [$key]"
+        val tmp = File(partial, "$key.${src.ext}")
+        ChunkedDownloader.download(src, tmp, onProgress)
+        val dest = File(dir, "$stem.${src.ext}")
+        if (!tmp.renameTo(dest)) {
+            tmp.copyTo(dest, overwrite = true)
+            tmp.delete()
+        }
+        s.art?.let { url -> saveImage(url, File(Downloader.coversDir(ctx), "$stem.jpg")) }
+        writeMeta(ctx, dest, s.title, s.artist, "high", s)
+        return dest
+    }
+
+    private fun saveImage(url: String, out: File) {
+        runCatching {
+            val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            try {
+                c.connectTimeout = 10_000
+                c.readTimeout = 15_000
+                if (c.responseCode == 200) c.inputStream.use { input -> out.outputStream().use { input.copyTo(it) } }
+            } finally {
+                c.disconnect()
+            }
+        }
+    }
+
+    fun writeMeta(ctx: Context, audio: File, title: String, artist: String, quality: String, song: Song? = null) {
         runCatching {
             val o = org.json.JSONObject().put("t", title).put("a", artist).put("q", quality)
+            if (song != null && !song.isYouTube) {
+                o.put("k", song.id).put("s", song.source).put("p", song.page ?: "").put("r", song.art ?: "")
+            }
             File(Downloader.coversDir(ctx), audio.nameWithoutExtension + ".json").writeText(o.toString())
         }
     }

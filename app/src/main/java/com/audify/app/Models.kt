@@ -18,34 +18,73 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 
-/** A song on YouTube, identified by its video id. */
+/**
+ * A song from any platform.
+ *  - YouTube: [id] is the 11-character video id.
+ *  - SoundCloud / Bandcamp / Audius: [id] is "sc:…", "bc:…" or "au:…", [page] is its web page
+ *    and [art] its cover image.
+ */
 data class Song(
     val id: String,
     val title: String,
     val artist: String,
     val durationSec: Int = 0,
+    val source: String = "yt",
+    val page: String? = null,
+    val art: String? = null,
 ) {
-    val url get() = "https://www.youtube.com/watch?v=$id"
-    val thumb get() = "https://i.ytimg.com/vi/$id/mqdefault.jpg"
-    val thumbLarge get() = "https://i.ytimg.com/vi/$id/hq720.jpg"
+    val isYouTube get() = source == "yt"
+    val url get() = if (isYouTube) "https://www.youtube.com/watch?v=$id" else page ?: ""
+    val thumb get() = art ?: if (isYouTube) "https://i.ytimg.com/vi/$id/mqdefault.jpg" else ""
+    val thumbLarge get() = art ?: if (isYouTube) "https://i.ytimg.com/vi/$id/hq720.jpg" else ""
+    val sourceLabel get() = Sources.label(source)
 
-    /** A media item that streams from YouTube (resolved to a real URL when ExoPlayer loads it). */
-    fun toStreamItem(): MediaItem = MediaItem.Builder()
-        .setMediaId("yt:$id")
-        .setUri("ytid:$id")
-        .setMediaMetadata(
-            MediaMetadata.Builder()
-                .setTitle(title)
-                .setArtist(artist.ifEmpty { null })
-                .setArtworkUri(Uri.parse(thumbLarge))
-                .build()
-        )
-        .build()
+    /** A media item that streams (resolved to a real URL when it's about to play). */
+    fun toStreamItem(): MediaItem {
+        val md = MediaMetadata.Builder()
+            .setTitle(title)
+            .setArtist(artist.ifEmpty { null })
+            .setArtworkUri(thumbLarge.takeIf { it.isNotEmpty() }?.let { Uri.parse(it) })
+            .build()
+        return if (isYouTube) {
+            MediaItem.Builder().setMediaId("yt:$id").setUri("ytid:$id").setMediaMetadata(md).build()
+        } else {
+            ExtSongs.remember(this)
+            MediaItem.Builder().setMediaId("ext:$id").setUri("ext:$id").setMediaMetadata(md).build()
+        }
+    }
 
-    fun toJson(): JSONObject = JSONObject().put("i", id).put("t", title).put("a", artist).put("d", durationSec)
+    fun toJson(): JSONObject = JSONObject().put("i", id).put("t", title).put("a", artist).put("d", durationSec).apply {
+        if (!isYouTube) {
+            put("s", source)
+            put("p", page ?: "")
+            put("r", art ?: "")
+        }
+    }
 
     companion object {
-        fun fromJson(o: JSONObject) = Song(o.optString("i"), o.optString("t"), o.optString("a"), o.optInt("d"))
+        fun fromJson(o: JSONObject) = Song(
+            o.optString("i"), o.optString("t"), o.optString("a"), o.optInt("d"),
+            o.optString("s").ifEmpty { "yt" }, o.optString("p").ifEmpty { null }, o.optString("r").ifEmpty { null },
+        )
+    }
+}
+
+/** Non-YouTube songs currently in the queue, so the player can look up their pages. */
+object ExtSongs {
+    private val map = java.util.concurrent.ConcurrentHashMap<String, Song>()
+    fun remember(s: Song) {
+        map[s.id] = s
+    }
+    fun get(id: String): Song? = map[id]
+}
+
+object Sources {
+    fun label(source: String) = when (source) {
+        "sc" -> "SoundCloud"
+        "bc" -> "Bandcamp"
+        "au" -> "Audius"
+        else -> "YouTube"
     }
 }
 
@@ -216,12 +255,13 @@ object AudifyCodes {
     sealed interface Parsed {
         data class Songs(val ids: List<String>) : Parsed
         data class SharedPlaylist(val name: String, val ids: List<String>, val by: String?) : Parsed
+        data class Page(val url: String) : Parsed
     }
 
     fun songCode(id: String) = "AU-$id"
     fun songUri(id: String) = "audify://s/$id"
     fun playlistUri(p: Playlist, by: String) =
-        "audify://p/" + Uri.encode(p.name.take(40)) + "/" + p.songs.take(80).joinToString(",") { it.id } +
+        "audify://p/" + Uri.encode(p.name.take(40)) + "/" + p.songs.filter { it.isYouTube }.take(80).joinToString(",") { it.id } +
             "?by=" + Uri.encode(by.take(30))
 
     fun parse(text: String): Parsed? {
@@ -239,6 +279,7 @@ object AudifyCodes {
             val ids = t.removePrefix("audify://s/").split(',').filter { ID.matches(it) }
             return if (ids.isEmpty()) null else Parsed.Songs(ids)
         }
+        if (OtherSources.isSupportedPage(t)) return Parsed.Page(t)
         Downloader.videoIdFromUrl(t)?.let { return Parsed.Songs(listOf(it)) }
         if (ID.matches(t)) return Parsed.Songs(listOf(t))
         return null

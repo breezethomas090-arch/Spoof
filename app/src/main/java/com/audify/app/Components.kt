@@ -133,8 +133,11 @@ fun SongRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                listOfNotNull(song.artist.ifBlank { null }, song.durationSec.takeIf { it > 0 }?.let { fmtSec(it) })
-                    .joinToString("  ·  "),
+                listOfNotNull(
+                    song.artist.ifBlank { null },
+                    song.durationSec.takeIf { it > 0 }?.let { fmtSec(it) },
+                    song.sourceLabel.takeIf { !song.isYouTube },
+                ).joinToString("  ·  "),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
