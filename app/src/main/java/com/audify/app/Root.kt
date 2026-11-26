@@ -30,6 +30,10 @@ private data class TabSpec(val label: String, val icon: ImageVector)
 
 @Composable
 fun AppRoot() {
+    if (!Ui.setupDone) {
+        SetupScreen()
+        return
+    }
     val ctx = LocalContext.current
     val jobs by Downloads.jobs.collectAsStateWithLifecycle()
     val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->

@@ -30,6 +30,7 @@ data class ShareTarget(
 
 /** App-wide UI state, so any screen can open the player, menus, sheets and dialogs. */
 object Ui {
+    var setupDone by mutableStateOf(false)      // first-launch yt-dlp update finished (or skipped)
     var tab by mutableIntStateOf(0)            // 0 Home, 1 Search, 2 Library
     var detail by mutableStateOf<Detail?>(null)
     var showPlayer by mutableStateOf(false)

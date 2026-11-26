@@ -231,9 +231,109 @@ object Downloader {
         YoutubeDL.getInstance().destroyProcessById(processId)
     }
 
-    fun updateYtDlp(ctx: Context): String {
+    // ---------------------------------------------------------------- yt-dlp updates
+
+    private const val LATEST_PAGE = "https://github.com/yt-dlp/yt-dlp/releases/latest"
+    private const val LATEST_BIN = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
+
+    /** The yt-dlp file the library actually runs (inside the app's no-backup folder). */
+    private fun ytdlpFile(ctx: Context): File? =
+        ctx.noBackupFilesDir.walkTopDown().firstOrNull { it.isFile && it.name == "yt-dlp" }
+
+    /** Latest release tag, read from GitHub's redirect (no API call, so no rate limit). */
+    private fun latestTag(): String? {
+        val c = java.net.URL(LATEST_PAGE).openConnection() as java.net.HttpURLConnection
+        return try {
+            c.instanceFollowRedirects = false
+            c.requestMethod = "HEAD"
+            c.connectTimeout = 15_000
+            c.readTimeout = 15_000
+            c.setRequestProperty("User-Agent", "Audify")
+            c.getHeaderField("Location")?.substringAfterLast("/tag/", "")?.takeIf { it.isNotBlank() }
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    private fun download(url: String, dest: File) {
+        var current = url
+        repeat(5) {   // follow redirects (github.com -> release asset host)
+            val c = java.net.URL(current).openConnection() as java.net.HttpURLConnection
+            try {
+                c.instanceFollowRedirects = false
+                c.connectTimeout = 20_000
+                c.readTimeout = 60_000
+                c.setRequestProperty("User-Agent", "Audify")
+                val code = c.responseCode
+                if (code in 300..399) {
+                    current = c.getHeaderField("Location") ?: throw IOException("Bad redirect")
+                    return@repeat
+                }
+                if (code != 200) throw IOException("Download failed (HTTP $code)")
+                c.inputStream.use { input -> dest.outputStream().use { input.copyTo(it) } }
+                return
+            } finally {
+                c.disconnect()
+            }
+        }
+        throw IOException("Too many redirects")
+    }
+
+    private fun runningVersion(): String =
+        YoutubeDL.getInstance().execute(
+            YoutubeDLRequest("https://www.youtube.com").apply { addOption("--version") },
+            "version-${System.nanoTime()}",
+        ) { _, _, _ -> }.out.trim().lines().last().trim()
+
+    fun lastUpdateCheck(ctx: Context): Long =
+        ctx.getSharedPreferences("ytdlp", Context.MODE_PRIVATE).getLong("checked", 0L)
+
+    /**
+     * Downloads the newest yt-dlp straight from its GitHub release and swaps it in,
+     * keeping a backup and rolling back if the new one won't run.
+     */
+    @Synchronized
+    fun updateYtDlp(ctx: Context, onStatus: (String) -> Unit = {}): String {
+        onStatus("Preparing…")
         init(ctx)
-        return YoutubeDL.getInstance().updateYoutubeDL(ctx.applicationContext)?.toString() ?: "No update info"
+        val sp = ctx.getSharedPreferences("ytdlp", Context.MODE_PRIVATE)
+        val target = ytdlpFile(ctx)
+            ?: return YoutubeDL.getInstance().updateYoutubeDL(ctx.applicationContext)?.toString() ?: "Updated"
+
+        onStatus("Checking for updates…")
+        val tag = runCatching { latestTag() }.getOrNull()
+        if (tag != null && tag == sp.getString("tag", null) && target.length() > 0) {
+            sp.edit().putLong("checked", System.currentTimeMillis()).apply()
+            return "Already up to date ($tag)"
+        }
+
+        onStatus("Downloading the latest yt-dlp…")
+        val tmp = File(ctx.cacheDir, "yt-dlp.new")
+        try {
+            download(LATEST_BIN, tmp)
+            val head = tmp.inputStream().use { val b = ByteArray(2); it.read(b); String(b) }
+            if (tmp.length() < 500_000 || (head != "#!" && head != "PK")) throw IOException("Downloaded file looks wrong")
+
+            onStatus("Installing…")
+            val backup = File(target.parentFile, "yt-dlp.bak")
+            target.copyTo(backup, overwrite = true)
+            tmp.copyTo(target, overwrite = true)
+
+            val version = try {
+                runningVersion()
+            } catch (e: Exception) {
+                backup.copyTo(target, overwrite = true)   // roll back
+                throw IOException("New version didn't start, kept the old one", e)
+            }
+            backup.delete()
+            sp.edit()
+                .putString("tag", tag ?: version)
+                .putLong("checked", System.currentTimeMillis())
+                .apply()
+            return "Updated to $version"
+        } finally {
+            tmp.delete()
+        }
     }
 
     private fun JSONObject.str(key: String): String = if (isNull(key)) "" else optString(key, "")

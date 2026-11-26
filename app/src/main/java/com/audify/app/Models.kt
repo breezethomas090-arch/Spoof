@@ -277,6 +277,10 @@ object Prefs {
         sp = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
     }
 
+    var setupDone: Boolean
+        get() = sp.getBoolean("setupDone", false)
+        set(v) = sp.edit().putBoolean("setupDone", v).apply()
+
     var keepVideo: Boolean
         get() = sp.getBoolean("keepVideo", false)
         set(v) = sp.edit().putBoolean("keepVideo", v).apply()

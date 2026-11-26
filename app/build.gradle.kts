@@ -12,8 +12,8 @@ android {
         applicationId = "com.audify.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "4.0"
+        versionCode = 5
+        versionName = "4.1"
     }
 
     // yt-dlp + Python + ffmpeg are native per-CPU, so build one APK per ABI to keep size down.
