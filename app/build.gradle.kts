@@ -1,3 +1,7 @@
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.TimeZone
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -13,7 +17,7 @@ android {
         minSdk = 24
         targetSdk = 35
         // Version code from the build time (in minutes), so every new APK installs as an update
-        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmm").apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date())
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmm").apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date())
         versionCode = (System.currentTimeMillis() / 60_000L - 29_000_000L).toInt()
         versionName = "5.1 ($stamp)"
     }
