@@ -292,6 +292,10 @@ object Prefs {
         sp = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
     }
 
+    var quickFirst: Boolean
+        get() = sp.getBoolean("quickFirst", true)
+        set(v) = sp.edit().putBoolean("quickFirst", v).apply()
+
     var fastDownloads: Boolean
         get() = sp.getBoolean("fastDownloads", true)
         set(v) = sp.edit().putBoolean("fastDownloads", v).apply()
@@ -311,4 +315,14 @@ object Prefs {
     var quality: Quality
         get() = runCatching { Quality.valueOf(sp.getString("quality", null) ?: "") }.getOrDefault(Quality.BEST)
         set(v) = sp.edit().putString("quality", v.name).apply()
+}
+
+/** App version shown in Settings (read from the installed package). */
+object BuildConfigVersion {
+    var name: String = ""
+        private set
+
+    fun init(ctx: Context) {
+        name = runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: ""
+    }
 }

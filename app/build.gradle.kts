@@ -12,8 +12,10 @@ android {
         applicationId = "com.audify.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 7
-        versionName = "5.0"
+        // Version code from the build time (in minutes), so every new APK installs as an update
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmm").apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date())
+        versionCode = (System.currentTimeMillis() / 60_000L - 29_000_000L).toInt()
+        versionName = "5.1 ($stamp)"
     }
 
     // yt-dlp + Python + ffmpeg are native per-CPU, so build one APK per ABI to keep size down.
@@ -39,6 +41,7 @@ android {
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true   // needed by NewPipeExtractor on Android < 13
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -64,6 +67,10 @@ dependencies {
     implementation("io.github.junkfood02.youtubedl-android:library:$ytdl")
     implementation("io.github.junkfood02.youtubedl-android:ffmpeg:$ytdl")
     implementation("io.github.junkfood02.youtubedl-android:aria2c:$ytdl")
+
+    // Second extractor alongside yt-dlp: pure Java, no Python, much faster to resolve streams
+    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.5")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
 
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.compose.ui:ui")

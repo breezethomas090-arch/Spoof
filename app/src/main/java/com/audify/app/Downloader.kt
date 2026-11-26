@@ -22,7 +22,7 @@ object Downloader {
     var ready = false
         private set
 
-    val AUDIO_EXTS = setOf("mp3", "m4a", "opus", "ogg", "flac", "wav", "aac")
+    val AUDIO_EXTS = setOf("mp3", "m4a", "opus", "ogg", "flac", "wav", "aac", "webm")
     private val PART_FILE = Regex("""\.f\d+\.""")
     private val ID_IN_URL = Regex("""(?:v=|youtu\.be/|shorts/|live/|embed/)([A-Za-z0-9_-]{11})""")
 
@@ -251,6 +251,21 @@ object Downloader {
         }
     }
 
+    /** yt-dlp fallback for Audify's own downloader. */
+    fun audioSource(ctx: Context, id: String, low: Boolean): AudioSource {
+        init(ctx)
+        val req = YoutubeDLRequest("https://www.youtube.com/watch?v=$id").apply {
+            addOption("-f", if (low) "worstaudio[abr>=40]/worstaudio" else "bestaudio[ext=m4a]/bestaudio")
+            addOption("--no-playlist")
+            addOption("--no-warnings")
+            addOption("--print", "%(url)s\t%(http_headers.User-Agent)s\t%(ext)s")
+        }
+        val line = run(req, "src").lines().lastOrNull { it.startsWith("http") } ?: throw IOException("No audio found")
+        val p = line.split('\t')
+        val ext = if (p.getOrNull(2) == "m4a") "m4a" else "webm"
+        return AudioSource(p[0], p.getOrNull(1)?.takeIf { it.isNotBlank() && it != "NA" }, ext, 0, "yt-dlp")
+    }
+
     /** Direct audio URL (+ the User-Agent it must be fetched with) for streaming. */
     fun streamInfo(ctx: Context, id: String): Pair<String, String?> {
         init(ctx)
@@ -281,6 +296,7 @@ object Downloader {
         keepVideo: Boolean,
         processId: String,
         fast: Boolean = true,
+        altClients: Boolean = false,
         onProgress: (Float, String) -> Unit,
     ): File {
         init(ctx)
@@ -291,6 +307,10 @@ object Downloader {
                 addOption("--windows-filenames")
                 addOption("--no-mtime")
                 addOption("--concurrent-fragments", "4")
+                if (altClients) {
+                    // Ask YouTube as different apps; helps when one is blocked for this user
+                    addOption("--extractor-args", "youtube:player_client=tv,mweb,android_vr,web_safari")
+                }
                 if (fast) {
                     // aria2c opens several connections at once, which gets past YouTube's per-connection speed limit
                     addOption("--downloader", "libaria2c.so")

@@ -2,6 +2,13 @@ package com.audify.app
 
 import android.os.Build
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -43,6 +50,39 @@ fun rememberPosition(): State<Long> {
     return s
 }
 
+/**
+ * Swipe right = next song, swipe left = previous. The content follows your finger
+ * and springs back.
+ */
+@Composable
+fun Modifier.swipeToSkip(): Modifier {
+    val density = LocalDensity.current
+    val threshold = with(density) { 72.dp.toPx() }
+    val offset = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    return this
+        .graphicsLayer {
+            translationX = offset.value
+            alpha = 1f - (kotlin.math.abs(offset.value) / (threshold * 4)).coerceIn(0f, 0.5f)
+        }
+        .pointerInput(Unit) {
+            detectHorizontalDragGestures(
+                onDragEnd = {
+                    val dx = offset.value
+                    when {
+                        dx > threshold -> PlayerConn.next()
+                        dx < -threshold -> PlayerConn.previous()
+                    }
+                    scope.launch { offset.animateTo(0f, spring()) }
+                },
+                onDragCancel = { scope.launch { offset.animateTo(0f, spring()) } },
+            ) { change, dragAmount ->
+                change.consume()
+                scope.launch { offset.snapTo(offset.value + dragAmount) }
+            }
+        }
+}
+
 @Composable
 private fun PlayPauseIcon(modifier: Modifier = Modifier) {
     Icon(
@@ -74,7 +114,7 @@ fun MiniPlayer() {
     ) {
         Column {
             Row(
-                Modifier.fillMaxWidth().clickable { Ui.showPlayer = true }.padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                Modifier.fillMaxWidth().swipeToSkip().clickable { Ui.showPlayer = true }.padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Artwork(md.artworkUri, Modifier.size(42.dp), RoundedCornerShape(6.dp), fallback = song?.thumb)
@@ -101,6 +141,9 @@ fun MiniPlayer() {
                 Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                     if (PlayerConn.isBuffering) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                     else IconButton(onClick = { PlayerConn.toggle() }) { PlayPauseIcon() }
+                }
+                IconButton(onClick = { PlayerConn.next() }) {
+                    Icon(AppIcons.SkipNext, contentDescription = "Skip to next song")
                 }
             }
             Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp).height(2.dp).background(Color.White.copy(alpha = 0.25f))) {
@@ -168,6 +211,7 @@ fun NowPlayingScreen() {
                     art,
                     Modifier
                         .aspectRatio(1f, matchHeightConstraintsFirst = true)
+                        .swipeToSkip()
                         .shadow(24.dp, RoundedCornerShape(16.dp)),
                     RoundedCornerShape(16.dp),
                     fallback = song?.thumb,

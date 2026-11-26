@@ -326,6 +326,7 @@ fun SettingsDialog() {
     var streamQ by remember { mutableStateOf(Prefs.streamQuality) }
     var keep by remember { mutableStateOf(Prefs.keepVideo) }
     var fast by remember { mutableStateOf(Prefs.fastDownloads) }
+    var quick by remember { mutableStateOf(Prefs.quickFirst) }
     var status by remember { mutableStateOf<String?>(null) }
     var updating by remember { mutableStateOf(false) }
     val dismiss = { Ui.showSettings = false }
@@ -386,12 +387,22 @@ fun SettingsDialog() {
             item {
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 Row(
+                    Modifier.fillMaxWidth().clickable { quick = !quick; Prefs.quickFirst = quick }.padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Quick download first", style = MaterialTheme.typography.bodyLarge)
+                        Text("Saves a small copy in seconds, then swaps in your chosen quality in the background", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = quick, onCheckedChange = { quick = it; Prefs.quickFirst = it })
+                }
+                Row(
                     Modifier.fillMaxWidth().clickable { fast = !fast; Prefs.fastDownloads = fast }.padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text("Fast downloads", style = MaterialTheme.typography.bodyLarge)
-                        Text("Uses several connections at once (aria2c) and 2 downloads at a time", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Downloads each song in parallel pieces, 3 songs at a time", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(checked = fast, onCheckedChange = { fast = it; Prefs.fastDownloads = it })
                 }
@@ -428,7 +439,7 @@ fun SettingsDialog() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     LogoMark(18.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text("Audify 5.0", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Audify " + BuildConfigVersion.name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(Modifier.height(32.dp))
             }

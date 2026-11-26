@@ -9,6 +9,7 @@ class App : Application() {
         Prefs.init(this)
         Store.init(this)
         Profile.init(this)
+        BuildConfigVersion.init(this)
         Ui.setupDone = Prefs.setupDone
         thread(name = "startup") {
             Library.refresh(this)

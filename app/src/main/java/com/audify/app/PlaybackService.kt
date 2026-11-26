@@ -43,6 +43,23 @@ object Streams {
 
     fun clear() = cache.clear()
 
+    /**
+     * Finds a working stream: NewPipeExtractor first (fast, no Python), checked with a tiny
+     * test request, then yt-dlp as the fallback.
+     */
+    fun source(ctx: Context, id: String): AudioSource {
+        val pick = when (Prefs.streamQuality) {
+            StreamQuality.LOW -> NewPipeSource.Pick.LOWEST
+            StreamQuality.NORMAL -> NewPipeSource.Pick.NORMAL
+            StreamQuality.HIGH -> NewPipeSource.Pick.HIGHEST
+        }
+        runCatching { NewPipeSource.audio(id, pick) }.getOrNull()
+            ?.takeIf { ChunkedDownloader.works(it) }
+            ?.let { return it }
+        val (url, ua) = Downloader.streamInfo(ctx, id)
+        return AudioSource(url, ua, "m4a", 0, "yt-dlp")
+    }
+
     // ---- on-disk audio cache: replays and seeks don't re-download, next song is pre-buffered
     private var diskCache: androidx.media3.datasource.cache.SimpleCache? = null
     private var cacheFactory: androidx.media3.datasource.cache.CacheDataSource.Factory? = null
@@ -61,7 +78,8 @@ object Streams {
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(20_000)
-        val resolving = ResolvingDataSource.Factory(DefaultDataSource.Factory(app, http)) { spec -> resolve(app, spec) }
+        val chunked = androidx.media3.datasource.DataSource.Factory { ChunkedHttpDataSource(http.createDataSource()) }
+        val resolving = ResolvingDataSource.Factory(chunked) { spec -> resolve(app, spec) }
         val factory = androidx.media3.datasource.cache.CacheDataSource.Factory()
             .setCache(cache)
             .setUpstreamDataSourceFactory(resolving)
@@ -93,8 +111,8 @@ object Streams {
         prefetcher.execute {
             try {
                 if (cache[id]?.let { now - it.at < TTL_MS } != true) {
-                    val (url, ua) = Downloader.streamInfo(ctx, id)
-                    cache[id] = Entry(url, ua, System.currentTimeMillis())
+                    val src = source(ctx, id)
+                    cache[id] = Entry(src.url, src.userAgent, System.currentTimeMillis())
                 }
                 prebuffer(ctx, id)
             } catch (_: Exception) {
@@ -111,7 +129,7 @@ object Streams {
         val now = System.currentTimeMillis()
         val entry = cache[id]?.takeIf { now - it.at < TTL_MS }
             ?: try {
-                Downloader.streamInfo(ctx, id).let { (url, ua) -> Entry(url, ua, now) }.also { cache[id] = it }
+                source(ctx, id).let { Entry(it.url, it.userAgent, now) }.also { cache[id] = it }
             } catch (e: java.io.IOException) {
                 throw e
             } catch (e: Exception) {
@@ -120,6 +138,74 @@ object Streams {
         val headers = HashMap(spec.httpRequestHeaders)
         entry.userAgent?.let { headers["User-Agent"] = it }
         return spec.buildUpon().setUri(Uri.parse(entry.url)).setHttpRequestHeaders(headers).build()
+    }
+}
+
+/**
+ * Streams in 2 MB pieces instead of one long request. YouTube slows down single long
+ * connections, so short range requests keep the buffer full and playback smooth.
+ */
+@OptIn(UnstableApi::class)
+private class ChunkedHttpDataSource(
+    private val upstream: androidx.media3.datasource.DataSource,
+) : androidx.media3.datasource.DataSource {
+    private val chunk = 2L * 1024 * 1024
+    private var spec: DataSpec? = null
+    private var pos = 0L
+    private var end = -1L          // exclusive; -1 = unknown
+    private var upstreamOpen = false
+
+    override fun addTransferListener(transferListener: androidx.media3.datasource.TransferListener) =
+        upstream.addTransferListener(transferListener)
+
+    override fun open(dataSpec: DataSpec): Long {
+        spec = dataSpec
+        pos = dataSpec.position
+        end = if (dataSpec.length != C.LENGTH_UNSET.toLong()) dataSpec.position + dataSpec.length else -1L
+        openChunk()
+        if (end < 0) {
+            // Learn the total size from the first response ("Content-Range: bytes a-b/total")
+            val total = upstream.responseHeaders.entries
+                .firstOrNull { it.key.equals("Content-Range", ignoreCase = true) }
+                ?.value?.firstOrNull()?.substringAfter('/')?.toLongOrNull()
+            if (total != null) end = total
+        }
+        return if (end >= 0) end - dataSpec.position else C.LENGTH_UNSET.toLong()
+    }
+
+    private fun openChunk() {
+        val s = spec ?: throw java.io.IOException("Not opened")
+        val len = if (end >= 0) minOf(chunk, end - pos) else chunk
+        upstream.open(s.buildUpon().setPosition(pos).setLength(len).build())
+        upstreamOpen = true
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        if (length == 0) return 0
+        while (true) {
+            if (end in 0..pos) return C.RESULT_END_OF_INPUT
+            val n = upstream.read(buffer, offset, length)
+            if (n != C.RESULT_END_OF_INPUT) {
+                pos += n
+                return n
+            }
+            // This piece is finished: open the next one
+            upstream.close()
+            upstreamOpen = false
+            if (end < 0 || pos >= end) return C.RESULT_END_OF_INPUT
+            openChunk()
+        }
+    }
+
+    override fun getUri(): Uri? = upstream.uri
+
+    override fun getResponseHeaders(): Map<String, List<String>> = upstream.responseHeaders
+
+    override fun close() {
+        if (upstreamOpen) {
+            upstreamOpen = false
+            upstream.close()
+        }
     }
 }
 

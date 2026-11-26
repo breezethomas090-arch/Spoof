@@ -937,8 +937,12 @@ private fun DownloadsScreen() {
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    val upgrading by Downloads.upgrading.collectAsStateWithLifecycle()
                     Text(
-                        listOf(t.artist.ifBlank { "Unknown artist" }, t.file.extension.uppercase()).joinToString(" · "),
+                        listOf(
+                            t.artist.ifBlank { "Unknown artist" },
+                            if (t.quality == "low") (if (upgrading.contains(t.videoId ?: "")) "Quick copy · upgrading…" else "Quick copy") else t.file.extension.uppercase(),
+                        ).joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
