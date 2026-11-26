@@ -258,12 +258,12 @@ object Profile {
         avatar = sp.getString("avatar", null)?.takeIf { File(it).exists() }
     }
 
-    fun setName(n: String) {
+    fun changeName(n: String) {
         name = n.trim().take(30).ifEmpty { name }
         sp.edit().putString("name", name).apply()
     }
 
-    fun setAvatar(path: String?) {
+    fun changeAvatar(path: String?) {
         avatar?.takeIf { it != path }?.let { runCatching { File(it).delete() } }
         avatar = path
         sp.edit().putString("avatar", path).apply()

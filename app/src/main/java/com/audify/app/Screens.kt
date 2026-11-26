@@ -903,7 +903,7 @@ private fun AccountScreen() {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) scope.launch {
             val path = withContext(Dispatchers.IO) { saveImage(ctx, uri, "avatars", "avatar", 512) }
-            if (path != null) Profile.setAvatar(path) else Ui.toast(ctx, "Couldn't use that image")
+            if (path != null) Profile.changeAvatar(path) else Ui.toast(ctx, "Couldn't use that image")
         }
     }
     val pickPhoto = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
@@ -941,7 +941,7 @@ private fun AccountScreen() {
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(bottom = 12.dp)) {
                 OutlinedButton(onClick = { editName = true }) { Text("Edit profile") }
-                if (Profile.avatar != null) OutlinedButton(onClick = { Profile.setAvatar(null) }) { Text("Remove photo") }
+                if (Profile.avatar != null) OutlinedButton(onClick = { Profile.changeAvatar(null) }) { Text("Remove photo") }
             }
         }
         if (playlists.isNotEmpty()) {
@@ -980,7 +980,7 @@ private fun AccountScreen() {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    Profile.setName(name)
+                    Profile.changeName(name)
                     editName = false
                 }) { Text("Save") }
             },
