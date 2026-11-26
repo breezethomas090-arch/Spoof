@@ -48,12 +48,16 @@ object Downloader {
 
     // ---------------------------------------------------------------- lists
 
-    fun search(ctx: Context, query: String, limit: Int = 20): List<Song> =
-        flatList(ctx, "ytsearch$limit:$query", null)
+    fun search(ctx: Context, query: String, limit: Int = 20): List<Song> {
+        val music = runCatching { musicSongs(ctx, query, limit) }.getOrDefault(emptyList())
+        if (music.size >= 5) return music
+        val yt = flatList(ctx, "ytsearch${limit + 10}:$query", null).filter(::isSingleSong)
+        return (music + yt).distinctBy { it.id }.take(limit)
+    }
 
     /** Songs related to [id], from YouTube's auto-generated "Mix" for that video. */
     fun related(ctx: Context, id: String, limit: Int = 25): List<Song> =
-        flatList(ctx, "https://www.youtube.com/watch?v=$id&list=RD$id", limit).filter { it.id != id }
+        flatList(ctx, "https://www.youtube.com/watch?v=$id&list=RD$id", limit).filter { it.id != id && isSingleSong(it) }
 
     private fun flatList(ctx: Context, target: String, limit: Int?): List<Song> {
         init(ctx)
@@ -71,16 +75,80 @@ object Downloader {
             val title = e.str("title")
             if (id.length != 11 || title.isEmpty()) continue
             val dur = if (e.isNull("duration")) 0 else e.optDouble("duration", 0.0).toInt()
-            out += Song(id, title, e.str("channel").ifEmpty { e.str("uploader") }, dur)
+            out += Song(id, title, artistOf(e), dur)
         }
         return out.distinctBy { it.id }
     }
 
-    /** Public playlists on YouTube matching [query] (made by other people). */
+    private fun artistOf(e: JSONObject): String {
+        e.optJSONArray("artists")?.let { a ->
+            val names = (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() && it != "null" } }
+            if (names.isNotEmpty()) return names.joinToString(", ")
+        }
+        return e.str("artist").ifEmpty { e.str("channel") }.ifEmpty { e.str("uploader") }.removeSuffix(" - Topic")
+    }
+
+    // ---------------------------------------------------------------- real songs, not compilations
+
+    /** Catches "Top 100 songs 2026", "1 hour mix", full albums, nonstop playlists and similar. */
+    private val COMPILATION = Regex(
+        """(?i)(\btop\s*\d{2,3}\b|\b\d{2,3}\s*(songs|hits|tracks)\b|full\s*album|\bplaylist\b|compilation|non-?stop|megamix|""" +
+            """\b\d+\s*(hours?|hrs?)\b|greatest\s*hits|\bbest\s*of\b|\bmix\s*20\d\d|\bhits\s*20\d\d|20\d\d\s*hits|\btop\s*hits\b|\bbillboard\b)"""
+    )
+
+    /** Chart-style "Top 100" playlists, which people don't want in place of real playlists. */
+    private val TOP_N = Regex("""(?i)(\btop\s*\d{2,3}\b|\b\d{2,3}\s*(songs|hits)\b|\bbillboard\b|non-?stop)""")
+
+    fun isSingleSong(s: Song): Boolean =
+        (s.durationSec == 0 || s.durationSec in 45..600) && !COMPILATION.containsMatchIn(s.title)
+
+    private fun enc(q: String) = java.net.URLEncoder.encode(q, "UTF-8")
+
+    /** YouTube Music "Songs" search: real tracks only. */
+    private fun musicSongs(ctx: Context, query: String, limit: Int): List<Song> =
+        flatList(ctx, "https://music.youtube.com/search?q=${enc(query)}#songs", limit).filter(::isSingleSong)
+
+    /** YouTube Music's own editorial playlists ("Featured playlists"), e.g. Viral Hits, Pop Hotlist. */
+    fun featuredPlaylists(ctx: Context, query: String, limit: Int = 10): List<RemotePlaylist> =
+        playlistResults(ctx, "https://music.youtube.com/search?q=${enc(query)}#featured+playlists", limit)
+
+    /** Songs from the first featured playlist matching [query], with compilations removed. */
+    private fun songsFromFeatured(ctx: Context, query: String, limit: Int): List<Song> {
+        for (p in runCatching { featuredPlaylists(ctx, query, 3) }.getOrDefault(emptyList())) {
+            val songs = runCatching { playlistSongs(ctx, p.id, limit + 10) }.getOrDefault(emptyList()).filter(::isSingleSong)
+            if (songs.size >= 8) return songs.take(limit)
+        }
+        return emptyList()
+    }
+
+    /** What's actually going viral right now, from YouTube Music's viral/trending playlists. */
+    fun viral(ctx: Context, limit: Int = 30): List<Song> {
+        for (q in listOf("viral hits", "trending now", "tiktok hits")) {
+            val songs = songsFromFeatured(ctx, q, limit)
+            if (songs.isNotEmpty()) return songs
+        }
+        return flatList(ctx, "ytsearch40:new viral song official audio", 40).filter(::isSingleSong).take(limit)
+    }
+
+    /** Current songs for a genre or mood tile. */
+    fun genre(ctx: Context, name: String, limit: Int = 30): List<Song> {
+        songsFromFeatured(ctx, "$name hits", limit).takeIf { it.isNotEmpty() }?.let { return it }
+        songsFromFeatured(ctx, name, limit).takeIf { it.isNotEmpty() }?.let { return it }
+        return flatList(ctx, "ytsearch40:$name song official audio", 40).filter(::isSingleSong).take(limit)
+    }
+
+    /** Public playlists matching [query]: YouTube Music's editorial ones first, then community ones. */
     fun publicPlaylists(ctx: Context, query: String, limit: Int = 12): List<RemotePlaylist> {
+        val featured = runCatching { featuredPlaylists(ctx, query, limit) }.getOrDefault(emptyList())
+        if (featured.size >= 6) return featured
+        val community = runCatching {
+            playlistResults(ctx, "https://music.youtube.com/search?q=${enc(query)}#community+playlists", limit)
+        }.getOrDefault(emptyList())
+        return (featured + community).distinctBy { it.id }.take(limit)
+    }
+
+    private fun playlistResults(ctx: Context, url: String, limit: Int): List<RemotePlaylist> {
         init(ctx)
-        val url = "https://www.youtube.com/results?search_query=" +
-            java.net.URLEncoder.encode(query, "UTF-8") + "&sp=EgIQAw%3D%3D"
         val req = YoutubeDLRequest(url).apply {
             addOption("--flat-playlist")
             addOption("-J")
@@ -91,19 +159,23 @@ object Downloader {
         val out = ArrayList<RemotePlaylist>()
         for (i in 0 until entries.length()) {
             val e = entries.optJSONObject(i) ?: continue
-            val id = e.str("id")
+            var id = e.str("id").removePrefix("VL")
+            if (id.isEmpty()) id = e.str("url").substringAfter("list=", "").substringBefore('&')
             val title = e.str("title")
-            if (id.length < 13 || title.isEmpty() || id.startsWith("RD")) continue
+            // Skip videos, auto "Mix" radios and chart compilations; keep editorial RDCLAK playlists
+            if (id.length < 13 || title.isEmpty()) continue
+            if (id.startsWith("RD") && !id.startsWith("RDCLAK")) continue
+            if (TOP_N.containsMatchIn(title)) continue
             val thumbs = e.optJSONArray("thumbnails")
             val thumb = thumbs?.optJSONObject(thumbs.length() - 1)?.optString("url")?.takeIf { it.startsWith("http") }
             val count = if (e.isNull("playlist_count")) 0 else e.optInt("playlist_count")
-            out += RemotePlaylist(id, title, e.str("channel").ifEmpty { e.str("uploader") }, thumb, count)
+            out += RemotePlaylist(id, title, e.str("channel").ifEmpty { e.str("uploader") }.ifEmpty { "YouTube Music" }, thumb, count)
         }
-        return out
+        return out.distinctBy { it.id }
     }
 
     fun playlistSongs(ctx: Context, playlistId: String, limit: Int = 100): List<Song> =
-        flatList(ctx, "https://www.youtube.com/playlist?list=$playlistId", limit)
+        flatList(ctx, "https://music.youtube.com/playlist?list=$playlistId", limit)
 
     /** Look up titles for bare video ids (used when opening Audify codes). */
     fun resolveSongs(ctx: Context, ids: List<String>): List<Song> {

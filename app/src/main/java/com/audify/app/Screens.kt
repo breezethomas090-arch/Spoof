@@ -155,8 +155,13 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var publicLists by mutableStateOf<List<RemotePlaylist>>(emptyList())
         private set
+    var viral by mutableStateOf<List<Song>>(emptyList())
+        private set
+    var viralLoading by mutableStateOf(false)
+        private set
     private var loadedFor: String? = null
     private var publicLoaded = false
+    private var viralLoaded = false
 
     private fun pickSeed(): Song? = Store.history.value.firstOrNull()
         ?: Store.liked.value.firstOrNull()
@@ -173,16 +178,25 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 val r = runCatching {
                     withContext(Dispatchers.IO) {
                         if (s != null) Downloader.related(getApplication(), s.id)
-                        else Downloader.search(getApplication(), "top hits this week", 20)
+                        else Downloader.genre(getApplication(), "Pop", 20)
                     }
                 }
                 loading = false
                 r.onSuccess { recs = it }.onFailure { error = shortError(it) }
             }
         }
+        if (!viralLoaded || force) {
+            viralLoaded = true
+            viralLoading = true
+            viewModelScope.launch {
+                runCatching { withContext(Dispatchers.IO) { Downloader.viral(getApplication()) } }
+                    .onSuccess { viral = it }
+                viralLoading = false
+            }
+        }
         if (!publicLoaded || force) {
             publicLoaded = true
-            val q = s?.artist?.takeIf { it.isNotBlank() }?.let { "$it mix playlist" } ?: "top hits playlist"
+            val q = s?.artist?.takeIf { it.isNotBlank() }?.split(",")?.first()?.trim() ?: "viral hits"
             viewModelScope.launch {
                 runCatching { withContext(Dispatchers.IO) { Downloader.publicPlaylists(getApplication(), q) } }
                     .onSuccess { publicLists = it }
@@ -252,7 +266,29 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
 
         if (filter != 2) {
             item {
-                SectionHeader(vm.seed?.let { "More like ${it.artist.ifBlank { it.title }}" } ?: "Made for you") {
+                SectionHeader("Viral right now") {
+                    if (vm.viral.isNotEmpty()) {
+                        TextButton(onClick = { PlayerConn.playSongs(vm.viral, 0) }) { Text("Play all") }
+                    }
+                }
+            }
+            item {
+                if (vm.viral.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+                        if (vm.viralLoading) CircularProgressIndicator(strokeWidth = 2.dp)
+                        else Text("Couldn't load what's trending", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        itemsIndexed(vm.viral, key = { _, s -> "v:" + s.id }) { i, s -> SongCard(s) { PlayerConn.playSongs(vm.viral, i) } }
+                    }
+                }
+            }
+        }
+
+        if (filter != 2) {
+            item {
+                SectionHeader(vm.seed?.let { "More like ${it.artist.split(",").first().ifBlank { it.title }}" } ?: "Popular in Pop") {
                     IconButton(onClick = { vm.load(force = true) }) {
                         Icon(Icons.Rounded.Refresh, contentDescription = "Refresh", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -288,7 +324,7 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
         }
 
         if (filter != 1 && vm.publicLists.isNotEmpty()) {
-            item { SectionHeader("Popular playlists") }
+            item { SectionHeader("Playlists for you") }
             item {
                 LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     items(vm.publicLists, key = { "p:" + it.id }) { r ->
@@ -341,6 +377,23 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
             r.onSuccess {
                 results = it
                 if (it.isEmpty()) error = "No results for \"$q\""
+            }.onFailure { error = shortError(it) }
+        }
+    }
+
+    /** Genre / mood tiles: songs from YouTube Music's own playlist for that genre. */
+    fun genre(name: String) {
+        query = name
+        val mine = ++seq
+        loading = true
+        error = null
+        viewModelScope.launch {
+            val r = runCatching { withContext(Dispatchers.IO) { Downloader.genre(getApplication(), name) } }
+            if (mine != seq) return@launch
+            loading = false
+            r.onSuccess {
+                results = it
+                if (it.isEmpty()) error = "Couldn't load $name right now"
             }.onFailure { error = shortError(it) }
         }
     }
@@ -444,10 +497,7 @@ fun SearchScreen(vm: SearchViewModel = viewModel()) {
                                     .height(96.dp)
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(Brush.linearGradient(colors))
-                                    .clickable {
-                                        vm.query = name
-                                        vm.search("$name songs")
-                                    }
+                                    .clickable { vm.genre(name) }
                                     .padding(12.dp),
                             ) {
                                 Text(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.White)

@@ -411,7 +411,7 @@ fun SettingsDialog() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     LogoMark(18.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text("Audify 4.1", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Audify 4.2", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(Modifier.height(32.dp))
             }
