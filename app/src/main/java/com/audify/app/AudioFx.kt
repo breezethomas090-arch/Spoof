@@ -89,7 +89,7 @@ object AudioFx {
             .apply()
     }
 
-    fun setEnabled(on: Boolean) {
+    fun turnOn(on: Boolean) {
         enabled = on
         save()
         apply()
@@ -121,21 +121,21 @@ object AudioFx {
         apply()
     }
 
-    fun setSurround(v: Int) {
+    fun changeSurround(v: Int) {
         surround = v.coerceIn(0, 1000)
         if (!enabled) enabled = true
         save()
         apply()
     }
 
-    fun setLoudness(v: Int) {
+    fun changeLoudness(v: Int) {
         loudness = v.coerceIn(0, 1000)
         if (!enabled) enabled = true
         save()
         apply()
     }
 
-    fun reset() = choosePreset(PRESETS.first()).also { setSurround(0) }
+    fun reset() = choosePreset(PRESETS.first()).also { changeSurround(0) }
 
     // ---------------------------------------------------------------- live effects
 

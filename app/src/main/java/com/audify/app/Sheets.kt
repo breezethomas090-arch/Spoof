@@ -484,7 +484,7 @@ fun EqualizerSheet() {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Switch(checked = AudioFx.enabled, onCheckedChange = { AudioFx.setEnabled(it) })
+                    Switch(checked = AudioFx.enabled, onCheckedChange = { AudioFx.turnOn(it) })
                 }
                 AudioFx.unsupported?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
@@ -516,8 +516,8 @@ fun EqualizerSheet() {
             item {
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 EqSlider("Bass boost", AudioFx.bassBoost.toFloat(), 0f..1000f, "${AudioFx.bassBoost / 10}%") { AudioFx.setBass(it.toInt()) }
-                EqSlider("3D surround", AudioFx.surround.toFloat(), 0f..1000f, "${AudioFx.surround / 10}%") { AudioFx.setSurround(it.toInt()) }
-                EqSlider("Loudness", AudioFx.loudness.toFloat(), 0f..1000f, "+%.1f dB".format(AudioFx.loudness / 100f)) { AudioFx.setLoudness(it.toInt()) }
+                EqSlider("3D surround", AudioFx.surround.toFloat(), 0f..1000f, "${AudioFx.surround / 10}%") { AudioFx.changeSurround(it.toInt()) }
+                EqSlider("Loudness", AudioFx.loudness.toFloat(), 0f..1000f, "+%.1f dB".format(AudioFx.loudness / 100f)) { AudioFx.changeLoudness(it.toInt()) }
                 Spacer(Modifier.height(8.dp))
                 Row {
                     OutlinedButton(onClick = { AudioFx.reset() }) { Text("Reset") }
