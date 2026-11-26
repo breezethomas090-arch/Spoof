@@ -1,0 +1,264 @@
+package com.audify.app
+
+import android.os.Build
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.Player
+import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
+
+@Composable
+fun rememberPosition(): State<Long> {
+    val s = remember { mutableLongStateOf(PlayerConn.position) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            s.longValue = PlayerConn.position
+            delay(500)
+        }
+    }
+    return s
+}
+
+@Composable
+private fun PlayPauseIcon(modifier: Modifier = Modifier) {
+    Icon(
+        if (PlayerConn.isPlaying) AppIcons.Pause else Icons.Rounded.PlayArrow,
+        contentDescription = if (PlayerConn.isPlaying) "Pause" else "Play",
+        modifier = modifier,
+    )
+}
+
+/** Floating bar above the tabs. */
+@Composable
+fun MiniPlayer() {
+    val item = PlayerConn.current ?: return
+    val md = item.mediaMetadata
+    val pos by rememberPosition()
+    val dur = PlayerConn.duration
+    val song = PlayerConn.currentSong
+    val liked by Store.liked.collectAsStateWithLifecycle()
+    val isLiked = song != null && liked.any { it.id == song.id }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+    ) {
+        Column {
+            Row(
+                Modifier.fillMaxWidth().clickable { Ui.showPlayer = true }.padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Artwork(md.artworkUri, Modifier.size(42.dp), RoundedCornerShape(6.dp), fallback = song?.thumb)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(md.title?.toString() ?: "", style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        PlayerConn.error ?: (md.artist?.toString() ?: ""),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (PlayerConn.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (song != null) {
+                    IconButton(onClick = { Store.toggleLike(song) }) {
+                        Icon(
+                            if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                            contentDescription = "Like",
+                            tint = if (isLiked) Pink else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    if (PlayerConn.isBuffering) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    else IconButton(onClick = { PlayerConn.toggle() }) { PlayPauseIcon() }
+                }
+            }
+            Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp).height(2.dp).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f)
+                        .fillMaxHeight()
+                        .background(Color.White),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun NowPlayingScreen() {
+    val md = PlayerConn.current?.mediaMetadata
+    val song = PlayerConn.currentSong
+    val liked by Store.liked.collectAsStateWithLifecycle()
+    val isLiked = song != null && liked.any { it.id == song.id }
+    val pos by rememberPosition()
+    val dur = PlayerConn.duration
+    var dragging by remember { mutableStateOf(false) }
+    var dragValue by remember { mutableFloatStateOf(0f) }
+    val max = dur.toFloat().coerceAtLeast(1f)
+    val shown = if (dragging) dragValue else pos.toFloat().coerceIn(0f, max)
+    val art = md?.artworkUri
+
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        // Soft blurred artwork glow behind everything (Android 12+)
+        if (Build.VERSION.SDK_INT >= 31 && art != null) {
+            AsyncImage(
+                model = art,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().blur(90.dp).alpha(0.45f),
+            )
+        }
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.2f), Color.Black.copy(alpha = 0.85f), Color.Black))
+            )
+        )
+
+        Column(
+            Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { Ui.showPlayer = false }) {
+                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Close", modifier = Modifier.size(30.dp))
+                }
+                Spacer(Modifier.weight(1f))
+                LogoMark(18.dp)
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = { song?.let { Ui.menu = SongMenuTarget(it) } }, enabled = song != null) {
+                    Icon(Icons.Rounded.MoreVert, contentDescription = "More")
+                }
+            }
+
+            Box(Modifier.weight(1f).fillMaxWidth().padding(vertical = 20.dp), contentAlignment = Alignment.Center) {
+                Artwork(
+                    art,
+                    Modifier
+                        .aspectRatio(1f, matchHeightConstraintsFirst = true)
+                        .shadow(24.dp, RoundedCornerShape(16.dp)),
+                    RoundedCornerShape(16.dp),
+                    fallback = song?.thumb,
+                )
+            }
+
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(md?.title?.toString() ?: "", style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        md?.artist?.toString() ?: "",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (song != null) {
+                    IconButton(onClick = { Store.toggleLike(song) }) {
+                        Icon(
+                            if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                            contentDescription = "Like",
+                            tint = if (isLiked) Pink else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
+                }
+            }
+            PlayerConn.error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+
+            Slider(
+                value = shown,
+                onValueChange = {
+                    dragging = true
+                    dragValue = it
+                },
+                onValueChangeFinished = {
+                    PlayerConn.seekTo(dragValue.toLong())
+                    dragging = false
+                },
+                valueRange = 0f..max,
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color.White,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.2f),
+                ),
+            )
+            Row(Modifier.fillMaxWidth()) {
+                Text(fmtMs(shown.toLong()), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.weight(1f))
+                Text(fmtMs(dur), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.height(8.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val on = MaterialTheme.colorScheme.primary
+                val off = MaterialTheme.colorScheme.onSurfaceVariant
+                IconButton(onClick = { PlayerConn.toggleShuffle() }) {
+                    Icon(AppIcons.Shuffle, contentDescription = "Shuffle", tint = if (PlayerConn.shuffle) on else off)
+                }
+                IconButton(onClick = { PlayerConn.previous() }, modifier = Modifier.size(56.dp)) {
+                    Icon(AppIcons.SkipPrevious, contentDescription = "Previous", modifier = Modifier.size(34.dp))
+                }
+                Box(Modifier.size(72.dp), contentAlignment = Alignment.Center) {
+                    GradientPlayButton(72.dp, PlayerConn.isPlaying) { PlayerConn.toggle() }
+                    if (PlayerConn.isBuffering) CircularProgressIndicator(Modifier.size(72.dp), color = Color.White, strokeWidth = 2.dp)
+                }
+                IconButton(onClick = { PlayerConn.next() }, modifier = Modifier.size(56.dp)) {
+                    Icon(AppIcons.SkipNext, contentDescription = "Next", modifier = Modifier.size(34.dp))
+                }
+                IconButton(onClick = { PlayerConn.cycleRepeat() }) {
+                    Icon(
+                        if (PlayerConn.repeatMode == Player.REPEAT_MODE_ONE) AppIcons.RepeatOne else AppIcons.Repeat,
+                        contentDescription = "Repeat",
+                        tint = if (PlayerConn.repeatMode == Player.REPEAT_MODE_OFF) off else on,
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            if (song != null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    DownloadAction(song)
+                    IconButton(onClick = { Ui.addToPlaylist = listOf(song) }) {
+                        Icon(AppIcons.PlaylistAdd, contentDescription = "Add to playlist", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconButton(onClick = { Ui.shareSong(song) }) {
+                        Icon(Icons.Rounded.Share, contentDescription = "Share", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}

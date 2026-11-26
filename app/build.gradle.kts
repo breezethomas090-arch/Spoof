@@ -5,15 +5,15 @@ plugins {
 }
 
 android {
-    namespace = "com.example.ytplayer"
+    namespace = "com.audify.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.ytplayer"
+        applicationId = "com.audify.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "3.0"
     }
 
     // yt-dlp + Python + ffmpeg are native per-CPU, so build one APK per ABI to keep size down.
@@ -78,4 +78,5 @@ dependencies {
     implementation("com.google.guava:guava:33.3.1-android")
 
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }

@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "YTPlayer"
+rootProject.name = "Audify"
 include(":app")

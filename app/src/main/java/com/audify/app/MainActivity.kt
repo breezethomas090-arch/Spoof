@@ -1,23 +1,18 @@
-package com.example.ytplayer
+package com.audify.app
 
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.mutableIntStateOf
 import android.graphics.Color as AColor
 
 class MainActivity : ComponentActivity() {
-
-    /** 0 = Search, 1 = Library. Lives here so a share can switch tabs. */
-    private val tab = mutableIntStateOf(0)
 
     private val notifPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -36,11 +31,11 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            YTTheme {
-                AppRoot(tab)
+            AudifyTheme {
+                AppRoot()
             }
         }
-        handleShare(intent)
+        handleIntent(intent)
     }
 
     override fun onStart() {
@@ -55,16 +50,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleShare(intent)
+        handleIntent(intent)
     }
 
-    private fun handleShare(intent: Intent?) {
-        if (intent?.action != Intent.ACTION_SEND) return
-        val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
-        val link = Regex("""https?://\S+""").find(text)?.value ?: return
-        intent.action = null
-        Downloads.enqueue(this, link, title = intent.getStringExtra(Intent.EXTRA_SUBJECT) ?: link)
-        tab.intValue = 1
-        Toast.makeText(this, "Downloading…", Toast.LENGTH_SHORT).show()
+    /** Shared YouTube links ("Share → Audify") and audify:// links / QR codes. */
+    private fun handleIntent(intent: Intent?) {
+        val text = when (intent?.action) {
+            Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
+            Intent.ACTION_VIEW -> intent.dataString
+            else -> null
+        } ?: return
+        intent?.action = null
+        val link = Regex("""(audify://\S+|https?://\S+)""").find(text)?.value ?: text
+        // Player connection may still be starting: give it a moment
+        window.decorView.postDelayed({ Ui.openCode(this, link) }, 600)
     }
 }

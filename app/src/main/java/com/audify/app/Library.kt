@@ -1,7 +1,6 @@
-package com.example.ytplayer
+package com.audify.app
 
 import android.content.Context
-import android.content.SharedPreferences
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.media3.common.MediaItem
@@ -14,6 +13,7 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
+/** A downloaded audio file. */
 data class Track(
     val file: File,
     val title: String,
@@ -23,6 +23,8 @@ data class Track(
 ) {
     val path: String get() = file.absolutePath
 
+    fun toSong(): Song? = videoId?.let { Song(it, title, artist) }
+
     fun toMediaItem(): MediaItem = MediaItem.Builder()
         .setMediaId(path)
         .setUri(Uri.fromFile(file))
@@ -30,15 +32,14 @@ data class Track(
             MediaMetadata.Builder()
                 .setTitle(title)
                 .setArtist(artist.ifEmpty { null })
-                .setArtworkUri(cover?.let { Uri.fromFile(it) })
+                .setArtworkUri(cover?.let { Uri.fromFile(it) } ?: videoId?.let { Uri.parse(Song(it, "", "").thumbLarge) })
                 .build()
         )
         .build()
 }
 
-/** The downloaded songs on disk. */
+/** Downloaded songs on disk. */
 object Library {
-    private val AUDIO_EXTS = setOf("mp3", "m4a", "ogg", "opus", "wav", "flac")
     private val ID_RE = Regex("""\s*\[([A-Za-z0-9_-]{11})]$""")
 
     private val _tracks = MutableStateFlow<List<Track>>(emptyList())
@@ -46,11 +47,14 @@ object Library {
 
     private val cache = HashMap<String, Pair<Long, Track>>()
 
+    fun byId(id: String): Track? = _tracks.value.firstOrNull { it.videoId == id }
+    fun byPath(path: String): Track? = _tracks.value.firstOrNull { it.path == path }
+
     @Synchronized
     fun refresh(ctx: Context) {
         val covers = Downloader.coversDir(ctx)
         val files = Downloader.audioDir(ctx)
-            .listFiles { f -> f.isFile && f.extension.lowercase() in AUDIO_EXTS }
+            .listFiles { f -> f.isFile && f.extension.lowercase() in Downloader.AUDIO_EXTS }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
         _tracks.value = files.map { f ->
             cache[f.path]?.takeIf { it.first == f.lastModified() }?.second
@@ -84,7 +88,7 @@ object Library {
     }
 }
 
-/** Download queue: one download at a time, progress exposed as state. */
+/** Download queue: one at a time, progress exposed as state. */
 sealed interface DlState {
     data object Queued : DlState
     data class Running(val percent: Float, val line: String) : DlState
@@ -100,9 +104,10 @@ object Downloads {
     private val executor = Executors.newSingleThreadExecutor()
     private val cancelled = ConcurrentHashMap.newKeySet<String>()
 
-    fun keyFor(url: String) = Downloader.videoIdFromUrl(url) ?: url
+    fun enqueue(ctx: Context, song: Song) = enqueue(ctx, song.url, song.title, song.id)
 
-    fun enqueue(ctx: Context, url: String, title: String, key: String = keyFor(url)) {
+    fun enqueue(ctx: Context, url: String, title: String, key: String = Downloader.videoIdFromUrl(url) ?: url) {
+        if (Library.byId(key) != null) return
         val existing = _jobs.value[key]
         if (existing != null && existing.state !is DlState.Failed) return
         cancelled.remove(key)
@@ -112,7 +117,7 @@ object Downloads {
             if (cancelled.remove(key)) return@execute
             setState(key, DlState.Running(-1f, "Starting…"))
             try {
-                Downloader.fetch(app, url, Prefs.keepVideo, "dl-$key") { pct, line ->
+                Downloader.fetch(app, url, Prefs.quality, Prefs.keepVideo, "dl-$key") { pct, line ->
                     setState(key, DlState.Running(pct, line))
                 }
                 Library.refresh(app)
@@ -136,15 +141,4 @@ object Downloads {
         _jobs.update { m -> m[key]?.let { m + (key to it.copy(state = s)) } ?: m }
 
     private fun remove(key: String) = _jobs.update { it - key }
-}
-
-object Prefs {
-    private lateinit var sp: SharedPreferences
-    fun init(ctx: Context) {
-        sp = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
-    }
-
-    var keepVideo: Boolean
-        get() = sp.getBoolean("keepVideo", false)
-        set(v) = sp.edit().putBoolean("keepVideo", v).apply()
 }
