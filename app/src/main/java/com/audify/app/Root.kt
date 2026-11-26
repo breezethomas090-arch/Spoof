@@ -156,6 +156,7 @@ fun AppRoot() {
     Ui.share?.let { ShareDialog(it) }
     if (Ui.showSpotifyDialog) SpotifyImportDialog()
     if (Ui.showSettings) SettingsDialog()
+    if (Ui.showEq) EqualizerSheet()
     if (Ui.showCodeDialog) {
         CodeDialog(onScan = {
             scanner.launch(

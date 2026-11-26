@@ -148,6 +148,7 @@ object AppIcons {
         "M13,3v8h8V3H13zM19,9h-4V5h4V9z",
         "M19,19h2v2h-2zM13,13h2v2h-2zM15,15h2v2h-2zM13,17h2v2h-2zM15,19h2v2h-2zM17,17h2v2h-2zM17,13h2v2h-2zM19,15h2v2h-2z",
     )
+    val Equalizer = icon("Equalizer", "M10,20h4V4h-4v16zM4,20h4v-8H4v8zM16,9v11h4V9h-4z")
     val Copy = icon(
         "ContentCopy",
         "M16,1H4c-1.1,0 -2,0.9 -2,2v14h2V3h12V1zM19,5H8c-1.1,0 -2,0.9 -2,2v14c0,1.1 0.9,2 2,2h11c1.1,0 2,-0.9 2,-2V7c0,-1.1 -0.9,-2 -2,-2zM19,21H8V7h11v14z",

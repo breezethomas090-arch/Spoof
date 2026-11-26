@@ -306,7 +306,14 @@ class PlaybackService : MediaSessionService() {
             override fun onEvents(p: Player, events: Player.Events) {
                 AudifyWidget.update(applicationContext, p)
             }
+
+            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                AudioFx.attach(audioSessionId)
+            }
         })
+
+        // Equalizer / bass boost on the player's audio output
+        AudioFx.attach(player.audioSessionId)
 
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
@@ -353,6 +360,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         AudifyWidget.clear(applicationContext)
+        AudioFx.release()
         session?.run {
             player.release()
             release()

@@ -201,6 +201,13 @@ fun NowPlayingScreen() {
                 Spacer(Modifier.weight(1f))
                 LogoMark(18.dp)
                 Spacer(Modifier.weight(1f))
+                IconButton(onClick = { Ui.showEq = true }) {
+                    Icon(
+                        AppIcons.Equalizer,
+                        contentDescription = "Equalizer",
+                        tint = if (AudioFx.enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
                 IconButton(onClick = { song?.let { Ui.menu = SongMenuTarget(it) } }, enabled = song != null) {
                     Icon(Icons.Rounded.MoreVert, contentDescription = "More")
                 }

@@ -20,6 +20,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -335,6 +336,25 @@ fun SettingsDialog() {
         LazyColumn(Modifier.padding(horizontal = 24.dp)) {
             item {
                 Text("Settings", style = MaterialTheme.typography.headlineSmall)
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                        .clickable { Ui.showSettings = false; Ui.showEq = true }
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(AppIcons.Equalizer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Equalizer", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            if (AudioFx.enabled) "On · ${AudioFx.presetName}" else "Off",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 Spacer(Modifier.height(16.dp))
                 Text("STREAMING QUALITY", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 Text(
@@ -444,5 +464,111 @@ fun SettingsDialog() {
                 Spacer(Modifier.height(32.dp))
             }
         }
+    }
+}
+
+
+// ============================================================== equalizer
+
+@Composable
+fun EqualizerSheet() {
+    ModalBottomSheet(onDismissRequest = { Ui.showEq = false }, containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+        LazyColumn(Modifier.padding(horizontal = 24.dp)) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Equalizer", style = MaterialTheme.typography.headlineSmall)
+                        Text(
+                            if (AudioFx.enabled) AudioFx.presetName else "Off",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = AudioFx.enabled, onCheckedChange = { AudioFx.setEnabled(it) })
+                }
+                AudioFx.unsupported?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                }
+                Spacer(Modifier.height(16.dp))
+                EqCurve(Modifier.fillMaxWidth().height(110.dp))
+                Spacer(Modifier.height(16.dp))
+            }
+            item {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(AudioFx.PRESETS) { p ->
+                        FilterChip(
+                            selected = AudioFx.enabled && AudioFx.presetName == p.name,
+                            onClick = { AudioFx.choosePreset(p) },
+                            label = { Text(p.name) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+            items(AudioFx.FREQS.indices.toList()) { i ->
+                EqSlider(
+                    label = AudioFx.LABELS[i],
+                    value = AudioFx.gains[i],
+                    range = -AudioFx.MAX_DB..AudioFx.MAX_DB,
+                    valueText = "%+.1f dB".format(AudioFx.gains[i]),
+                ) { AudioFx.setGain(i, it) }
+            }
+            item {
+                HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                EqSlider("Bass boost", AudioFx.bassBoost.toFloat(), 0f..1000f, "${AudioFx.bassBoost / 10}%") { AudioFx.setBass(it.toInt()) }
+                EqSlider("3D surround", AudioFx.surround.toFloat(), 0f..1000f, "${AudioFx.surround / 10}%") { AudioFx.setSurround(it.toInt()) }
+                EqSlider("Loudness", AudioFx.loudness.toFloat(), 0f..1000f, "+%.1f dB".format(AudioFx.loudness / 100f)) { AudioFx.setLoudness(it.toInt()) }
+                Spacer(Modifier.height(8.dp))
+                Row {
+                    OutlinedButton(onClick = { AudioFx.reset() }) { Text("Reset") }
+                    Spacer(Modifier.weight(1f))
+                    Button(onClick = { Ui.showEq = false }) { Text("Done") }
+                }
+                Text(
+                    "Applies to everything Audify plays, streamed or downloaded. Some phones limit how strong bass boost and surround can be.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp, bottom = 32.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EqSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, valueText: String, onChange: (Float) -> Unit) {
+    Column(Modifier.padding(vertical = 2.dp)) {
+        Row {
+            Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text(valueText, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Slider(value = value, onValueChange = onChange, valueRange = range)
+    }
+}
+
+/** The EQ curve, drawn across 20 Hz – 20 kHz on a log scale. */
+@Composable
+private fun EqCurve(modifier: Modifier) {
+    val active = AudioFx.enabled
+    val gains = AudioFx.gains   // read so the curve redraws when sliders move
+    val lineColor = if (active) Violet else MaterialTheme.colorScheme.outline
+    val grid = MaterialTheme.colorScheme.outlineVariant
+    androidx.compose.foundation.Canvas(modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
+        val w = size.width
+        val h = size.height
+        val mid = h / 2
+        drawLine(grid, androidx.compose.ui.geometry.Offset(0f, mid), androidx.compose.ui.geometry.Offset(w, mid), strokeWidth = 2f)
+        val path = androidx.compose.ui.graphics.Path()
+        val minL = kotlin.math.ln(20f)
+        val maxL = kotlin.math.ln(20000f)
+        val steps = 80
+        for (s in 0..steps) {
+            val x = w * s / steps
+            val hz = kotlin.math.exp(minL + (maxL - minL) * s / steps)
+            val db = if (active) AudioFx.gainAt(hz) else 0f
+            val y = mid - (db / AudioFx.MAX_DB) * (h / 2 - 8f)
+            if (s == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        drawPath(path, lineColor, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 6f, cap = androidx.compose.ui.graphics.StrokeCap.Round))
     }
 }

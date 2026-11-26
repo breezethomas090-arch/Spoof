@@ -61,6 +61,7 @@ object Ui {
     var showSpotifyDialog by mutableStateOf(false)
     var showPlayer by mutableStateOf(false)
     var showSettings by mutableStateOf(false)
+    var showEq by mutableStateOf(false)
     var showCodeDialog by mutableStateOf(false)
     var menu by mutableStateOf<SongMenuTarget?>(null)
     var addToPlaylist by mutableStateOf<List<Song>?>(null)
